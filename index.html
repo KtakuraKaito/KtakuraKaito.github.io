@@ -7,43 +7,77 @@
     <script src="https://aframe.io/releases/1.0.4/aframe.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
     <script>
-      AFRAME.registerComponent('sound-trigger', {
+      // 人物タップ制御用コンポーネント
+      AFRAME.registerComponent('freud-interact', {
         init: function () {
-          var targetEl = this.el;
-          targetEl.addEventListener('click', function () {
-            var sound = document.getElementById('voice');
+          var el = this.el;
+          var sound = document.getElementById('voice');
+          var marker = document.getElementById('ar-marker');
+          var isMarkerVisible = false;
+
+          // マーカーを捉えた時だけタップ可能にする
+          marker.addEventListener('markerFound', function () {
+            isMarkerVisible = true;
+          });
+
+          // マーカーを見失ったらタップ判定を無効化する
+          marker.addEventListener('markerLost', function () {
+            isMarkerVisible = false;
+          });
+
+          // 人物がクリック・タップされた時の処理
+          el.addEventListener('click', function (evt) {
+            // マーカーが見えていない時は何もしない
+            if (!isMarkerVisible) return;
+
+            // 他の要素へのイベント伝播を防止
+            if (evt.stopPropagation) evt.stopPropagation();
+
+            // 音声を最初から再生
             if (sound) {
               sound.currentTime = 0;
               sound.play();
             }
+
+            // タップされたフィードバックとして一瞬拡大して戻る演出
+            el.setAttribute('animation', {
+              property: 'scale',
+              to: '1.2 1.2 1.2',
+              dur: 150,
+              dir: 'alternate',
+              loop: 2
+            });
           });
         }
       });
     </script>
   </head>
   <body style="margin: 0; overflow: hidden;">
-    <!-- 音声タグをa-sceneの外に配置してカメラ起動の妨害を回避 -->
+    <!-- 音声データ -->
     <audio id="voice" src="freud_intro.mp3"></audio>
 
     <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.8;" vr-mode-ui="enabled: false">
-      <!-- タイムアウトを設定し、万一の読み込み遅延時も最大3秒でカメラを起動 -->
       <a-assets timeout="3000">
+        <!-- ファイル名を freud.PNG に変更 -->
         <img id="freud-img" src="freud.PNG" />
       </a-assets>
 
-      <a-marker type="pattern" url="marker.patt">
+      <!-- emitevents: true でマーカーの認識状態を取得 -->
+      <a-marker id="ar-marker" type="pattern" url="marker.patt" emitevents="true">
         <a-plane
+          id="freud-plane"
           src="#freud-img"
           position="0 0 0"
           rotation="-90 0 0"
-          width="1.5"
-          height="1.5"
+          width="1.2"
+          height="1.2"
           material="transparent: true; alphaTest: 0.5; shader: flat;"
           class="clickable"
-          sound-trigger>
+          freud-interact>
         </a-plane>
       </a-marker>
 
+      <!-- カメラとカーソル判定 -->
       <a-entity camera cursor="rayOrigin: mouse" raycaster="objects: .clickable"></a-entity>
     </a-scene>
   </body>
