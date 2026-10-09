@@ -11,7 +11,7 @@
         init: function () {
           var targetEl = this.el;
           targetEl.addEventListener('click', function () {
-            var sound = document.querySelector('#voice');
+            var sound = document.getElementById('voice');
             if (sound) {
               sound.currentTime = 0;
               sound.play();
@@ -22,10 +22,13 @@
     </script>
   </head>
   <body style="margin: 0; overflow: hidden;">
-    <a-scene embedded arjs="patternRatio: 0.8;" vr-mode-ui="enabled: false">
-      <a-assets>
+    <!-- 音声タグをa-sceneの外に配置してカメラ起動の妨害を回避 -->
+    <audio id="voice" src="freud_intro.mp3"></audio>
+
+    <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.8;" vr-mode-ui="enabled: false">
+      <!-- タイムアウトを設定し、万一の読み込み遅延時も最大3秒でカメラを起動 -->
+      <a-assets timeout="3000">
         <img id="freud-img" src="freud.png" />
-        <audio id="voice" src="freud_intro.mp3" preload="auto"></audio>
       </a-assets>
 
       <a-marker type="pattern" url="marker.patt">
