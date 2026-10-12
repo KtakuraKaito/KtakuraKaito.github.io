@@ -4,8 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Psychology 3-Choice AR</title>
+    <!-- 基本のA-FrameとAR.js -->
     <script src="https://aframe.io/releases/1.0.4/aframe.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+    <!-- ビルボード（常にカメラを向く）機能を追加する拡張スクリプト -->
+    <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
     <script>
       AFRAME.registerComponent('choice-button', {
         schema: {
@@ -86,26 +89,22 @@
     </script>
   </head>
   <body style="margin: 0; overflow: hidden;">
-    <!-- 9個の音声ファイル -->
     <audio id="snd-f1" src="f1.mp3"></audio>
     <audio id="snd-f2" src="f2.mp3"></audio>
     <audio id="snd-f3" src="f3.mp3"></audio>
-
     <audio id="snd-j1" src="j1.mp3"></audio>
     <audio id="snd-j2" src="j2.mp3"></audio>
     <audio id="snd-j3" src="j3.mp3"></audio>
-
     <audio id="snd-a1" src="a1.mp3"></audio>
     <audio id="snd-a2" src="a2.mp3"></audio>
     <audio id="snd-a3" src="a3.mp3"></audio>
 
     <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.8;" vr-mode-ui="enabled: false">
       <a-assets timeout="3000">
-        <!-- 人物画像 -->
         <img id="img-freud" src="freud.PNG" />
         <img id="img-jung" src="jung.PNG" />
         <img id="img-adler" src="adler.PNG" />
-        <!-- 共通の吹き出し画像3種 -->
+        <!-- コマンドウィンドウ風の四角いボタン画像に変更を推奨 -->
         <img id="btn-1" src="balloon1.PNG" />
         <img id="btn-2" src="balloon2.PNG" />
         <img id="btn-3" src="balloon3.PNG" />
@@ -113,31 +112,35 @@
 
       <!-- 1人目：フロイト -->
       <a-marker id="marker-1" type="pattern" url="marker1.patt" emitevents="true" pop-animator="targetId: container-1">
-        <a-entity id="container-1" scale="0 0 0">
-          <a-plane src="#img-freud" position="-0.5 0 0" rotation="-90 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
-          <a-plane src="#btn-1" position="0.6 0 -0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f1; markerId: marker-1"></a-plane>
-          <a-plane src="#btn-2" position="0.6 0 0" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f2; markerId: marker-1"></a-plane>
-          <a-plane src="#btn-3" position="0.6 0 0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f3; markerId: marker-1"></a-plane>
+        <!-- コンテナ全体に look-at="[camera]" を追加し、常にカメラへ向ける -->
+        <a-entity id="container-1" scale="0 0 0" look-at="[camera]">
+          <!-- 人物画像の rotation を 0 0 0 に変更し、垂直に立てる -->
+          <a-plane src="#img-freud" position="-0.5 0 0" rotation="0 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          
+          <!-- ボタン群（RPGのコマンドのように縦に等間隔で整列） -->
+          <a-plane src="#btn-1" position="0.7 0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f1; markerId: marker-1"></a-plane>
+          <a-plane src="#btn-2" position="0.7 0 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f2; markerId: marker-1"></a-plane>
+          <a-plane src="#btn-3" position="0.7 -0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f3; markerId: marker-1"></a-plane>
         </a-entity>
       </a-marker>
 
       <!-- 2人目：ユング -->
       <a-marker id="marker-2" type="pattern" url="marker2.patt" emitevents="true" pop-animator="targetId: container-2">
-        <a-entity id="container-2" scale="0 0 0">
-          <a-plane src="#img-jung" position="-0.5 0 0" rotation="-90 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
-          <a-plane src="#btn-1" position="0.6 0 -0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j1; markerId: marker-2"></a-plane>
-          <a-plane src="#btn-2" position="0.6 0 0" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j2; markerId: marker-2"></a-plane>
-          <a-plane src="#btn-3" position="0.6 0 0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j3; markerId: marker-2"></a-plane>
+        <a-entity id="container-2" scale="0 0 0" look-at="[camera]">
+          <a-plane src="#img-jung" position="-0.5 0 0" rotation="0 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          <a-plane src="#btn-1" position="0.7 0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j1; markerId: marker-2"></a-plane>
+          <a-plane src="#btn-2" position="0.7 0 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j2; markerId: marker-2"></a-plane>
+          <a-plane src="#btn-3" position="0.7 -0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j3; markerId: marker-2"></a-plane>
         </a-entity>
       </a-marker>
 
       <!-- 3人目：アドラー -->
       <a-marker id="marker-3" type="pattern" url="marker3.patt" emitevents="true" pop-animator="targetId: container-3">
-        <a-entity id="container-3" scale="0 0 0">
-          <a-plane src="#img-adler" position="-0.5 0 0" rotation="-90 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
-          <a-plane src="#btn-1" position="0.6 0 -0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a1; markerId: marker-3"></a-plane>
-          <a-plane src="#btn-2" position="0.6 0 0" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a2; markerId: marker-3"></a-plane>
-          <a-plane src="#btn-3" position="0.6 0 0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a3; markerId: marker-3"></a-plane>
+        <a-entity id="container-3" scale="0 0 0" look-at="[camera]">
+          <a-plane src="#img-adler" position="-0.5 0 0" rotation="0 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          <a-plane src="#btn-1" position="0.7 0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a1; markerId: marker-3"></a-plane>
+          <a-plane src="#btn-2" position="0.7 0 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a2; markerId: marker-3"></a-plane>
+          <a-plane src="#btn-3" position="0.7 -0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a3; markerId: marker-3"></a-plane>
         </a-entity>
       </a-marker>
 
