@@ -3,81 +3,144 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Freud WebAR</title>
+    <title>Psychology 3-Choice AR</title>
     <script src="https://aframe.io/releases/1.0.4/aframe.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
     <script>
-      // 人物タップ制御用コンポーネント
-      AFRAME.registerComponent('freud-interact', {
+      AFRAME.registerComponent('choice-button', {
+        schema: {
+          audioId: { type: 'string' },
+          markerId: { type: 'string' }
+        },
         init: function () {
           var el = this.el;
-          var sound = document.getElementById('voice');
-          var marker = document.getElementById('ar-marker');
+          var audioId = this.data.audioId;
+          var markerId = this.data.markerId;
+          var marker = document.getElementById(markerId);
           var isMarkerVisible = false;
 
-          // マーカーを捉えた時だけタップ可能にする
           marker.addEventListener('markerFound', function () {
             isMarkerVisible = true;
           });
-
-          // マーカーを見失ったらタップ判定を無効化する
           marker.addEventListener('markerLost', function () {
             isMarkerVisible = false;
           });
 
-          // 人物がクリック・タップされた時の処理
           el.addEventListener('click', function (evt) {
-            // マーカーが見えていない時は何もしない
             if (!isMarkerVisible) return;
-
-            // 他の要素へのイベント伝播を防止
             if (evt.stopPropagation) evt.stopPropagation();
 
-            // 音声を最初から再生
-            if (sound) {
-              sound.currentTime = 0;
-              sound.play();
+            var allAudios = document.querySelectorAll('audio');
+            allAudios.forEach(function (aud) {
+              aud.pause();
+              aud.currentTime = 0;
+            });
+
+            var targetAudio = document.getElementById(audioId);
+            if (targetAudio) {
+              targetAudio.play();
             }
 
-            // タップされたフィードバックとして一瞬拡大して戻る演出
             el.setAttribute('animation', {
               property: 'scale',
-              to: '1.2 1.2 1.2',
-              dur: 150,
+              to: '0.85 0.85 0.85',
+              dur: 100,
               dir: 'alternate',
               loop: 2
             });
           });
         }
       });
+
+      AFRAME.registerComponent('pop-animator', {
+        schema: {
+          targetId: { type: 'string' }
+        },
+        init: function () {
+          var marker = this.el;
+          var targetId = this.data.targetId;
+
+          marker.addEventListener('markerFound', function () {
+            var target = document.getElementById(targetId);
+            if (target) {
+              target.setAttribute('scale', '0 0 0');
+              target.removeAttribute('animation');
+              target.setAttribute('animation', {
+                property: 'scale',
+                from: '0 0 0',
+                to: '1 1 1',
+                dur: 700,
+                easing: 'easeOutElastic'
+              });
+            }
+          });
+
+          marker.addEventListener('markerLost', function () {
+            var target = document.getElementById(targetId);
+            if (target) {
+              target.setAttribute('scale', '0 0 0');
+            }
+          });
+        }
+      });
     </script>
   </head>
   <body style="margin: 0; overflow: hidden;">
-    <!-- 音声データ -->
-    <audio id="voice" src="freud_intro.mp3"></audio>
+    <!-- 9個の音声ファイル -->
+    <audio id="snd-f1" src="f1.mp3"></audio>
+    <audio id="snd-f2" src="f2.mp3"></audio>
+    <audio id="snd-f3" src="f3.mp3"></audio>
+
+    <audio id="snd-j1" src="j1.mp3"></audio>
+    <audio id="snd-j2" src="j2.mp3"></audio>
+    <audio id="snd-j3" src="j3.mp3"></audio>
+
+    <audio id="snd-a1" src="a1.mp3"></audio>
+    <audio id="snd-a2" src="a2.mp3"></audio>
+    <audio id="snd-a3" src="a3.mp3"></audio>
 
     <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.8;" vr-mode-ui="enabled: false">
       <a-assets timeout="3000">
-        <!-- ファイル名を freud.PNG に変更 -->
-        <img id="freud-img" src="freud.PNG" />
+        <!-- 人物画像 -->
+        <img id="img-freud" src="freud.PNG" />
+        <img id="img-jung" src="jung.PNG" />
+        <img id="img-adler" src="adler.PNG" />
+        <!-- 共通の吹き出し画像3種 -->
+        <img id="btn-1" src="balloon1.PNG" />
+        <img id="btn-2" src="balloon2.PNG" />
+        <img id="btn-3" src="balloon3.PNG" />
       </a-assets>
 
-      <!-- emitevents: true でマーカーの認識状態を取得 -->
-      <a-marker id="ar-marker" type="pattern" url="marker.patt" emitevents="true">
-        <a-plane
-          id="freud-plane"
-          src="#freud-img"
-          position="0 0 0"
-          rotation="-90 0 0"
-          width="1.2"
-          height="1.2"
-          material="transparent: true; alphaTest: 0.5; shader: flat;"
-          class="clickable"
-          freud-interact>
-        </a-plane>
+      <!-- 1人目：フロイト -->
+      <a-marker id="marker-1" type="pattern" url="marker1.patt" emitevents="true" pop-animator="targetId: container-1">
+        <a-entity id="container-1" scale="0 0 0">
+          <a-plane src="#img-freud" position="-0.5 0 0" rotation="-90 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          <a-plane src="#btn-1" position="0.6 0 -0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f1; markerId: marker-1"></a-plane>
+          <a-plane src="#btn-2" position="0.6 0 0" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f2; markerId: marker-1"></a-plane>
+          <a-plane src="#btn-3" position="0.6 0 0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f3; markerId: marker-1"></a-plane>
+        </a-entity>
       </a-marker>
 
-      <!-- カメラとカーソル判定 -->
+      <!-- 2人目：ユング -->
+      <a-marker id="marker-2" type="pattern" url="marker2.patt" emitevents="true" pop-animator="targetId: container-2">
+        <a-entity id="container-2" scale="0 0 0">
+          <a-plane src="#img-jung" position="-0.5 0 0" rotation="-90 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          <a-plane src="#btn-1" position="0.6 0 -0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j1; markerId: marker-2"></a-plane>
+          <a-plane src="#btn-2" position="0.6 0 0" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j2; markerId: marker-2"></a-plane>
+          <a-plane src="#btn-3" position="0.6 0 0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j3; markerId: marker-2"></a-plane>
+        </a-entity>
+      </a-marker>
+
+      <!-- 3人目：アドラー -->
+      <a-marker id="marker-3" type="pattern" url="marker3.patt" emitevents="true" pop-animator="targetId: container-3">
+        <a-entity id="container-3" scale="0 0 0">
+          <a-plane src="#img-adler" position="-0.5 0 0" rotation="-90 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          <a-plane src="#btn-1" position="0.6 0 -0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a1; markerId: marker-3"></a-plane>
+          <a-plane src="#btn-2" position="0.6 0 0" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a2; markerId: marker-3"></a-plane>
+          <a-plane src="#btn-3" position="0.6 0 0.5" rotation="-90 0 0" width="1.0" height="0.4" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a3; markerId: marker-3"></a-plane>
+        </a-entity>
+      </a-marker>
+
       <a-entity camera cursor="rayOrigin: mouse" raycaster="objects: .clickable"></a-entity>
     </a-scene>
   </body>
