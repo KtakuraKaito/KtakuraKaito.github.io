@@ -2,73 +2,159 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Psychology 3-Choice AR</title>
-    <!-- 基本のA-FrameとAR.js -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Psychology RPG WebAR</title>
     <script src="https://aframe.io/releases/1.0.4/aframe.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
-    <!-- ビルボード（常にカメラを向く）機能を追加する拡張スクリプト -->
     <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
+
+    <style>
+      /* スマホ画面手前に固定表示する2DのUIデザイン */
+      body {
+        margin: 0;
+        overflow: hidden;
+        font-family: sans-serif;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      /* 上部の案内バー */
+      #status-bar {
+        position: fixed;
+        top: 15px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.85);
+        color: #fff;
+        border: 2px solid #fff;
+        border-radius: 8px;
+        padding: 8px 16px;
+        font-size: 14px;
+        font-weight: bold;
+        z-index: 9999;
+        text-align: center;
+        box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        white-space: nowrap;
+      }
+
+      /* 右側の3つのコマンドボタン配置エリア */
+      #command-panel {
+        position: fixed;
+        right: 12px;
+        top: 45%;
+        transform: translateY(-50%);
+        display: none;
+        flex-direction: column;
+        gap: 14px;
+        z-index: 9999;
+        width: 48%;
+        max-width: 220px;
+      }
+
+      .cmd-btn {
+        width: 100%;
+        height: auto;
+        cursor: pointer;
+        filter: drop-shadow(0px 4px 6px rgba(0, 0, 0, 0.7));
+        transition: transform 0.1s;
+      }
+
+      .cmd-btn:active {
+        transform: scale(0.92);
+      }
+
+      /* 下部のRPG風セリフ字幕ウィンドウ */
+      #dialogue-box {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 88%;
+        max-width: 500px;
+        min-height: 85px;
+        background: rgba(0, 0, 0, 0.9);
+        border: 3px solid #ffffff;
+        border-radius: 10px;
+        padding: 12px 16px;
+        color: #ffffff;
+        z-index: 9999;
+        display: none;
+        box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
+        box-sizing: border-box;
+      }
+
+      #speaker-name {
+        font-size: 13px;
+        color: #ffd700;
+        font-weight: bold;
+        margin-bottom: 6px;
+        border-bottom: 1px solid #555;
+        padding-bottom: 3px;
+      }
+
+      #subtitle-text {
+        font-size: 15px;
+        line-height: 1.5;
+        letter-spacing: 0.5px;
+      }
+    </style>
+
     <script>
-      AFRAME.registerComponent('choice-button', {
-        schema: {
-          audioId: { type: 'string' },
-          markerId: { type: 'string' }
+      // 現在のキャラクターとセリフデータ
+      var currentChar = null;
+      var typeTimer = null;
+
+      var charData = {
+        freud: {
+          name: "ジグムント・フロイト（精神分析）",
+          planeId: "plane-freud",
+          voices: ["snd-f1", "snd-f2", "snd-f3"],
+          scripts: [
+            "こんにちはなのだ。精神分析の生みの親、ジグムント・フロイト先生なのだ。オーストリアの神経学者で、心の中に隠れた無意識の存在を世に広めた、近代心理学の超大物なのだ。",
+            "フロイト先生の研究は無意識の構造なのだ。心は氷山のようなもので、普段自覚できる意識は海面の上に出たほんの一部なのだ。夜に見る夢や言い間違いには、隠れた本音が潜んでいるのだ。",
+            "なんでもかんでも性的な欲求に結びつけて説明したがる癖があったのだ。自分の説に少しでも反対した弟子たちを片っ端から破門にしたせいで、最後はみんな逃げ出しちゃったのだ。"
+          ]
         },
-        init: function () {
-          var el = this.el;
-          var audioId = this.data.audioId;
-          var markerId = this.data.markerId;
-          var marker = document.getElementById(markerId);
-          var isMarkerVisible = false;
-
-          marker.addEventListener('markerFound', function () {
-            isMarkerVisible = true;
-          });
-          marker.addEventListener('markerLost', function () {
-            isMarkerVisible = false;
-          });
-
-          el.addEventListener('click', function (evt) {
-            if (!isMarkerVisible) return;
-            if (evt.stopPropagation) evt.stopPropagation();
-
-            var allAudios = document.querySelectorAll('audio');
-            allAudios.forEach(function (aud) {
-              aud.pause();
-              aud.currentTime = 0;
-            });
-
-            var targetAudio = document.getElementById(audioId);
-            if (targetAudio) {
-              targetAudio.play();
-            }
-
-            el.setAttribute('animation', {
-              property: 'scale',
-              to: '0.85 0.85 0.85',
-              dur: 100,
-              dir: 'alternate',
-              loop: 2
-            });
-          });
+        jung: {
+          name: "カール・ユング（分析心理学）",
+          planeId: "plane-jung",
+          voices: ["snd-j1", "snd-j2", "snd-j3"],
+          scripts: [
+            "カール・ユング先生なのだ。スイスの精神科医で、最初はフロイト先生の一番弟子だったけれど、考え方の違いから独自に分析心理学を立ち上げた、心の深層を探求した学者なのだ。",
+            "ユング先生の研究は集合的無意識なのだ。個人の経験を超えて、人類全体が神話や昔話のように共通して持っている心の底を発見したのだ。性格を外向的と内向的に分けたのも先生なのだ。",
+            "心の奥底を探究しすぎて、後半はオカルトや錬金術、UFOの研究にまで本気でのめり込んじゃったのだ。言っていることが深遠すぎて、周りの学者たちをかなり困惑させたのだ。"
+          ]
+        },
+        adler: {
+          name: "アルフレッド・アドラー（個人心理学）",
+          planeId: "plane-adler",
+          voices: ["snd-a1", "snd-a2", "snd-a3"],
+          scripts: [
+            "アルフレッド・アドラー先生なのだ。オーストリア出身で個人心理学を創始したのだ。現代では嫌われる勇気という本で大ブームになって、今や3人の中で一番有名かもしれないのだ。",
+            "アドラー先生の研究は目的論なのだ。過去のトラウマが原因ではなく、今持っている目的のために人は感情を使っていると説いたのだ。劣等感をバネにして人は前に進めるのだ。",
+            "トラウマなんて存在しない、すべては自分の甘えだと強烈な正論で殴ってくる厳しさがあるのだ。おかげで現代では、ビジネスマン向けの自己啓発セミナーの教祖様みたいになっているのだ。"
+          ]
         }
-      });
+      };
 
-      AFRAME.registerComponent('pop-animator', {
+      // マーカー認識時の処理コンポーネント
+      AFRAME.registerComponent('char-marker', {
         schema: {
-          targetId: { type: 'string' }
+          charKey: { type: 'string' },
+          containerId: { type: 'string' }
         },
         init: function () {
           var marker = this.el;
-          var targetId = this.data.targetId;
+          var charKey = this.data.charKey;
+          var containerId = this.data.containerId;
 
           marker.addEventListener('markerFound', function () {
-            var target = document.getElementById(targetId);
-            if (target) {
-              target.setAttribute('scale', '0 0 0');
-              target.removeAttribute('animation');
-              target.setAttribute('animation', {
+            // 3Dモデルのポップアップ登場
+            var container = document.getElementById(containerId);
+            if (container) {
+              container.setAttribute('scale', '0 0 0');
+              container.removeAttribute('animation__pop');
+              container.setAttribute('animation__pop', {
                 property: 'scale',
                 from: '0 0 0',
                 to: '1 1 1',
@@ -76,19 +162,104 @@
                 easing: 'easeOutElastic'
               });
             }
-          });
 
-          marker.addEventListener('markerLost', function () {
-            var target = document.getElementById(targetId);
-            if (target) {
-              target.setAttribute('scale', '0 0 0');
-            }
+            // 2D画面のUIを現在の偉人に切り替え
+            activateCharacterUI(charKey);
           });
         }
       });
+
+      // UIの有効化と切り替え
+      function activateCharacterUI(charKey) {
+        if (currentChar !== charKey) {
+          currentChar = charKey;
+          var info = charData[charKey];
+          document.getElementById('status-bar').innerText = "召喚中: " + info.name;
+          document.getElementById('command-panel').style.display = "flex";
+          document.getElementById('dialogue-box').style.display = "block";
+          document.getElementById('speaker-name').innerText = info.name;
+          document.getElementById('subtitle-text').innerText = "右のコマンドをタップして質問してみよう！";
+        }
+      }
+
+      // コマンドボタンが押された時の音声＆字幕再生処理
+      function selectChoice(index) {
+        if (!currentChar) return;
+        var info = charData[currentChar];
+
+        // 全音声を停止・リセット
+        var allAudios = document.querySelectorAll('audio');
+        allAudios.forEach(function (aud) {
+          aud.pause();
+          aud.currentTime = 0;
+        });
+
+        // 該当する音声を再生
+        var targetAudio = document.getElementById(info.voices[index]);
+        var charPlane = document.getElementById(info.planeId);
+
+        if (targetAudio) {
+          targetAudio.play();
+
+          // 喋っている間、偉人がピョコピョコ跳ねる演出
+          if (charPlane) {
+            charPlane.setAttribute('animation__talk', {
+              property: 'scale',
+              from: '1 1 1',
+              to: '1.08 0.94 1',
+              dir: 'alternate',
+              dur: 180,
+              loop: true
+            });
+          }
+
+          targetAudio.onended = function () {
+            if (charPlane) {
+              charPlane.removeAttribute('animation__talk');
+              charPlane.setAttribute('scale', '1 1 1');
+            }
+          };
+        }
+
+        // 字幕を1文字ずつタイプライター風に表示
+        showSubtitle(info.scripts[index]);
+      }
+
+      function showSubtitle(text) {
+        if (typeTimer) clearInterval(typeTimer);
+        var subEl = document.getElementById('subtitle-text');
+        subEl.innerText = "";
+        var i = 0;
+        typeTimer = setInterval(function () {
+          if (i < text.length) {
+            subEl.innerText += text.charAt(i);
+            i++;
+          } else {
+            clearInterval(typeTimer);
+          }
+        }, 50);
+      }
     </script>
   </head>
-  <body style="margin: 0; overflow: hidden;">
+
+  <body>
+    <!-- 画面上部のステータス案内 -->
+    <div id="status-bar">QRコードをカメラに映して偉人を召喚しよう！</div>
+
+    <!-- 画面右側に固定表示される3つのコマンドボタン（100%確実に押せる） -->
+    <div id="command-panel">
+      <img src="balloon1.PNG" class="cmd-btn" onclick="selectChoice(0)" />
+      <img src="balloon2.PNG" class="cmd-btn" onclick="selectChoice(1)" />
+      <img src="balloon3.PNG" class="cmd-btn" onclick="selectChoice(2)" />
+    </div>
+
+    <!-- 画面下部のRPG風メッセージ字幕枠 -->
+    <div id="dialogue-box">
+      <div id="speaker-name"></div>
+      <div id="subtitle-text"></div>
+    </div>
+
+    <!-- 9個の音声ファイル -->
     <audio id="snd-f1" src="f1.mp3"></audio>
     <audio id="snd-f2" src="f2.mp3"></audio>
     <audio id="snd-f3" src="f3.mp3"></audio>
@@ -99,52 +270,50 @@
     <audio id="snd-a2" src="a2.mp3"></audio>
     <audio id="snd-a3" src="a3.mp3"></audio>
 
+    <!-- AR空間 -->
     <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.8;" vr-mode-ui="enabled: false">
       <a-assets timeout="3000">
         <img id="img-freud" src="freud.PNG" />
         <img id="img-jung" src="jung.PNG" />
         <img id="img-adler" src="adler.PNG" />
-        <!-- コマンドウィンドウ風の四角いボタン画像に変更を推奨 -->
-        <img id="btn-1" src="balloon1.PNG" />
-        <img id="btn-2" src="balloon2.PNG" />
-        <img id="btn-3" src="balloon3.PNG" />
       </a-assets>
 
-      <!-- 1人目：フロイト -->
-      <a-marker id="marker-1" type="pattern" url="marker1.patt" emitevents="true" pop-animator="targetId: container-1">
-        <!-- コンテナ全体に look-at="[camera]" を追加し、常にカメラへ向ける -->
-        <a-entity id="container-1" scale="0 0 0" look-at="[camera]">
-          <!-- 人物画像の rotation を 0 0 0 に変更し、垂直に立てる -->
-          <a-plane src="#img-freud" position="-0.5 0 0" rotation="0 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
-          
-          <!-- ボタン群（RPGのコマンドのように縦に等間隔で整列） -->
-          <a-plane src="#btn-1" position="0.7 0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f1; markerId: marker-1"></a-plane>
-          <a-plane src="#btn-2" position="0.7 0 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f2; markerId: marker-1"></a-plane>
-          <a-plane src="#btn-3" position="0.7 -0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-f3; markerId: marker-1"></a-plane>
+      <!-- 1人目：フロイト（サイバーブルーの召喚陣） -->
+      <a-marker id="marker-1" type="pattern" url="marker1.patt" emitevents="true" char-marker="charKey: freud; containerId: container-1">
+        <a-entity id="container-1" scale="0 0 0">
+          <!-- 足元の回転する二重魔法陣 -->
+          <a-ring rotation="-90 0 0" radius-inner="0.65" radius-outer="0.75" color="#00ffff" material="shader: flat; opacity: 0.8; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 6000; easing: linear"></a-ring>
+          <a-ring rotation="-90 0 0" radius-inner="0.45" radius-outer="0.52" color="#0088ff" material="shader: flat; opacity: 0.6; side: double; wireframe: true;" animation="property: rotation; from: -90 0 360; to: -90 0 0; loop: true; dur: 4000; easing: linear"></a-ring>
+          <!-- カメラを向いてフワフワ浮遊するフロイト -->
+          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.1 0; to: 0 0.35 0; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine">
+            <a-plane id="plane-freud" src="#img-freud" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          </a-entity>
         </a-entity>
       </a-marker>
 
-      <!-- 2人目：ユング -->
-      <a-marker id="marker-2" type="pattern" url="marker2.patt" emitevents="true" pop-animator="targetId: container-2">
-        <a-entity id="container-2" scale="0 0 0" look-at="[camera]">
-          <a-plane src="#img-jung" position="-0.5 0 0" rotation="0 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
-          <a-plane src="#btn-1" position="0.7 0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j1; markerId: marker-2"></a-plane>
-          <a-plane src="#btn-2" position="0.7 0 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j2; markerId: marker-2"></a-plane>
-          <a-plane src="#btn-3" position="0.7 -0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-j3; markerId: marker-2"></a-plane>
+      <!-- 2人目：ユング（ミスティックパープルの召喚陣） -->
+      <a-marker id="marker-2" type="pattern" url="marker2.patt" emitevents="true" char-marker="charKey: jung; containerId: container-2">
+        <a-entity id="container-2" scale="0 0 0">
+          <a-ring rotation="-90 0 0" radius-inner="0.65" radius-outer="0.75" color="#ff00ff" material="shader: flat; opacity: 0.8; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 6000; easing: linear"></a-ring>
+          <a-ring rotation="-90 0 0" radius-inner="0.45" radius-outer="0.52" color="#ffd700" material="shader: flat; opacity: 0.7; side: double; wireframe: true;" animation="property: rotation; from: -90 0 360; to: -90 0 0; loop: true; dur: 4000; easing: linear"></a-ring>
+          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.1 0; to: 0 0.35 0; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine">
+            <a-plane id="plane-jung" src="#img-jung" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          </a-entity>
         </a-entity>
       </a-marker>
 
-      <!-- 3人目：アドラー -->
-      <a-marker id="marker-3" type="pattern" url="marker3.patt" emitevents="true" pop-animator="targetId: container-3">
-        <a-entity id="container-3" scale="0 0 0" look-at="[camera]">
-          <a-plane src="#img-adler" position="-0.5 0 0" rotation="0 0 0" width="1.2" height="1.2" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
-          <a-plane src="#btn-1" position="0.7 0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a1; markerId: marker-3"></a-plane>
-          <a-plane src="#btn-2" position="0.7 0 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a2; markerId: marker-3"></a-plane>
-          <a-plane src="#btn-3" position="0.7 -0.45 0" rotation="0 0 0" width="1.1" height="0.35" material="transparent: true; alphaTest: 0.5; shader: flat;" class="clickable" choice-button="audioId: snd-a3; markerId: marker-3"></a-plane>
+      <!-- 3人目：アドラー（エメラルドグリーンの召喚陣） -->
+      <a-marker id="marker-3" type="pattern" url="marker3.patt" emitevents="true" char-marker="charKey: adler; containerId: container-3">
+        <a-entity id="container-3" scale="0 0 0">
+          <a-ring rotation="-90 0 0" radius-inner="0.65" radius-outer="0.75" color="#00ff88" material="shader: flat; opacity: 0.8; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 6000; easing: linear"></a-ring>
+          <a-ring rotation="-90 0 0" radius-inner="0.45" radius-outer="0.52" color="#ffff00" material="shader: flat; opacity: 0.7; side: double; wireframe: true;" animation="property: rotation; from: -90 0 360; to: -90 0 0; loop: true; dur: 4000; easing: linear"></a-ring>
+          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.1 0; to: 0 0.35 0; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine">
+            <a-plane id="plane-adler" src="#img-adler" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          </a-entity>
         </a-entity>
       </a-marker>
 
-      <a-entity camera cursor="rayOrigin: mouse" raycaster="objects: .clickable"></a-entity>
+      <a-entity camera></a-entity>
     </a-scene>
   </body>
 </html>
