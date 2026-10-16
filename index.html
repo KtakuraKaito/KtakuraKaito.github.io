@@ -105,8 +105,7 @@
       var charData = {
         freud: {
           name: "ジグムント・フロイト（精神分析）",
-          headId: "head-freud",
-          bodyId: "body-freud",
+          planeId: "plane-freud",
           voices: ["snd-f1", "snd-f2", "snd-f3"],
           scripts: [
             "こんにちはなのだ。精神分析の生みの親、ジグムント・フロイト先生なのだ。オーストリアの神経学者で、心の中に隠れた無意識の存在を世に広めた、近代心理学の超大物なのだ。",
@@ -116,8 +115,7 @@
         },
         jung: {
           name: "カール・ユング（分析心理学）",
-          headId: "head-jung",
-          bodyId: "body-jung",
+          planeId: "plane-jung",
           voices: ["snd-j1", "snd-j2", "snd-j3"],
           scripts: [
             "カール・ユング先生なのだ。スイスの精神科医で、最初はフロイト先生の一番弟子だったけれど、考え方の違いから独自に分析心理学を立ち上げた、心の深層を探求した学者なのだ。",
@@ -127,8 +125,7 @@
         },
         adler: {
           name: "アルフレッド・アドラー（個人心理学）",
-          headId: "head-adler",
-          bodyId: "body-adler",
+          planeId: "plane-adler",
           voices: ["snd-a1", "snd-a2", "snd-a3"],
           scripts: [
             "アルフレッド・アドラー先生なのだ。オーストリア出身で個人心理学を創始したのだ。現代では嫌われる勇気という本で大ブームになって、今や3人の中で一番有名かもしれないのだ。",
@@ -179,55 +176,57 @@
         }
       }
 
-      // コマンドボタンが押された時の音声＆ペープサート会話アクション
+      // 通常の呼吸アニメーションを設定する関数
+      function setBreatheAnimation(el) {
+        if (!el) return;
+        el.setAttribute('animation__motion', {
+          property: 'scale',
+          from: '1 1 1',
+          to: '1.03 0.97 1',
+          dir: 'alternate',
+          dur: 1400,
+          loop: true,
+          easing: 'easeInOutSine'
+        });
+      }
+
+      // コマンドボタンが押された時の音声＆会話アクション処理
       function selectChoice(index) {
         if (!currentChar) return;
         var info = charData[currentChar];
 
+        // すべての音声をリセットし、全員の動きを通常の呼吸に戻す
         var allAudios = document.querySelectorAll('audio');
         allAudios.forEach(function (aud) {
           aud.pause();
           aud.currentTime = 0;
         });
+        ['plane-freud', 'plane-jung', 'plane-adler'].forEach(function (id) {
+          setBreatheAnimation(document.getElementById(id));
+        });
 
         var targetAudio = document.getElementById(info.voices[index]);
-        var headEl = document.getElementById(info.headId);
-        var bodyEl = document.getElementById(info.bodyId);
+        var charPlane = document.getElementById(info.planeId);
 
         if (targetAudio) {
           targetAudio.play();
 
-          // 喋っている間、頭がコクコクと小刻みに上下し、体も少し弾む演出
-          if (headEl) {
-            headEl.setAttribute('animation__talk', {
-              property: 'position',
-              from: '0 0 0.03',
-              to: '0 0.06 0.03',
-              dir: 'alternate',
-              dur: 140,
-              loop: true
-            });
-          }
-          if (bodyEl) {
-            bodyEl.setAttribute('animation__talk', {
+          // 喋っている間は、小刻みに元気よく跳ねる動きに切り替え
+          if (charPlane) {
+            charPlane.setAttribute('animation__motion', {
               property: 'scale',
               from: '1 1 1',
-              to: '1.04 0.97 1',
+              to: '1.08 0.93 1',
               dir: 'alternate',
-              dur: 280,
-              loop: true
+              dur: 160,
+              loop: true,
+              easing: 'easeInOutQuad'
             });
           }
 
+          // 音声が終わったら再びゆっくりした呼吸アニメーションに戻す
           targetAudio.onended = function () {
-            if (headEl) {
-              headEl.removeAttribute('animation__talk');
-              headEl.setAttribute('position', '0 0 0.03');
-            }
-            if (bodyEl) {
-              bodyEl.removeAttribute('animation__talk');
-              bodyEl.setAttribute('scale', '1 1 1');
-            }
+            setBreatheAnimation(charPlane);
           };
         }
 
@@ -280,13 +279,10 @@
       <a-assets timeout="3000">
         <!-- 自作した魔法陣PNG画像 -->
         <img id="img-magic" src="magic.PNG" />
-        <!-- 頭と体を分けた6枚のPNG画像 -->
-        <img id="img-freud-head" src="freud_head.PNG" />
-        <img id="img-freud-body" src="freud_body.PNG" />
-        <img id="img-jung-head" src="jung_head.PNG" />
-        <img id="img-jung-body" src="jung_body.PNG" />
-        <img id="img-adler-head" src="adler_head.PNG" />
-        <img id="img-adler-body" src="adler_body.PNG" />
+        <!-- 元の1枚絵3種 -->
+        <img id="img-freud" src="freud.PNG" />
+        <img id="img-jung" src="jung.PNG" />
+        <img id="img-adler" src="adler.PNG" />
       </a-assets>
 
       <!-- 1人目：フロイト -->
@@ -294,13 +290,9 @@
         <a-entity id="container-1" scale="0 0 0">
           <!-- 足元で回転する自作魔法陣PNG -->
           <a-plane src="#img-magic" position="0 0 0" rotation="-90 0 0" width="1.6" height="1.6" material="transparent: true; alphaTest: 0.1; shader: flat; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 8000; easing: linear"></a-plane>
-          
-          <!-- カメラを向いて浮遊するペープサート本体 -->
-          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.15 0; to: 0 0.3 0; dir: alternate; dur: 1800; loop: true; easing: easeInOutSine">
-            <!-- 体パーツ（呼吸するようにゆっくり伸縮） -->
-            <a-plane id="body-freud" src="#img-freud-body" position="0 0 0" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__breathe="property: scale; from: 1 1 1; to: 1.02 0.98 1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine"></a-plane>
-            <!-- 頭パーツ（少し手前に配置し、左右にわずかに揺れる） -->
-            <a-plane id="head-freud" src="#img-freud-head" position="0 0 0.03" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__sway="property: rotation; from: 0 0 -3; to: 0 0 3; dir: alternate; dur: 2200; loop: true; easing: easeInOutSine"></a-plane>
+          <!-- 浮遊しながら呼吸するフロイト（1枚絵） -->
+          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.12 0; to: 0 0.32 0; dir: alternate; dur: 1600; loop: true; easing: easeInOutSine">
+            <a-plane id="plane-freud" src="#img-freud" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__motion="property: scale; from: 1 1 1; to: 1.03 0.97 1; dir: alternate; dur: 1400; loop: true; easing: easeInOutSine"></a-plane>
           </a-entity>
         </a-entity>
       </a-marker>
@@ -309,10 +301,8 @@
       <a-marker id="marker-2" type="pattern" url="marker2.patt" emitevents="true" char-marker="charKey: jung; containerId: container-2">
         <a-entity id="container-2" scale="0 0 0">
           <a-plane src="#img-magic" position="0 0 0" rotation="-90 0 0" width="1.6" height="1.6" material="transparent: true; alphaTest: 0.1; shader: flat; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 8000; easing: linear"></a-plane>
-          
-          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.15 0; to: 0 0.3 0; dir: alternate; dur: 1800; loop: true; easing: easeInOutSine">
-            <a-plane id="body-jung" src="#img-jung-body" position="0 0 0" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__breathe="property: scale; from: 1 1 1; to: 1.02 0.98 1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine"></a-plane>
-            <a-plane id="head-jung" src="#img-jung-head" position="0 0 0.03" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__sway="property: rotation; from: 0 0 -3; to: 0 0 3; dir: alternate; dur: 2200; loop: true; easing: easeInOutSine"></a-plane>
+          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.12 0; to: 0 0.32 0; dir: alternate; dur: 1600; loop: true; easing: easeInOutSine">
+            <a-plane id="plane-jung" src="#img-jung" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__motion="property: scale; from: 1 1 1; to: 1.03 0.97 1; dir: alternate; dur: 1400; loop: true; easing: easeInOutSine"></a-plane>
           </a-entity>
         </a-entity>
       </a-marker>
@@ -321,10 +311,8 @@
       <a-marker id="marker-3" type="pattern" url="marker3.patt" emitevents="true" char-marker="charKey: adler; containerId: container-3">
         <a-entity id="container-3" scale="0 0 0">
           <a-plane src="#img-magic" position="0 0 0" rotation="-90 0 0" width="1.6" height="1.6" material="transparent: true; alphaTest: 0.1; shader: flat; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 8000; easing: linear"></a-plane>
-          
-          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.15 0; to: 0 0.3 0; dir: alternate; dur: 1800; loop: true; easing: easeInOutSine">
-            <a-plane id="body-adler" src="#img-adler-body" position="0 0 0" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__breathe="property: scale; from: 1 1 1; to: 1.02 0.98 1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine"></a-plane>
-            <a-plane id="head-adler" src="#img-adler-head" position="0 0 0.03" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__sway="property: rotation; from: 0 0 -3; to: 0 0 3; dir: alternate; dur: 2200; loop: true; easing: easeInOutSine"></a-plane>
+          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.12 0; to: 0 0.32 0; dir: alternate; dur: 1600; loop: true; easing: easeInOutSine">
+            <a-plane id="plane-adler" src="#img-adler" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__motion="property: scale; from: 1 1 1; to: 1.03 0.97 1; dir: alternate; dur: 1400; loop: true; easing: easeInOutSine"></a-plane>
           </a-entity>
         </a-entity>
       </a-marker>
