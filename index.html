@@ -9,7 +9,6 @@
     <script src="https://unpkg.com/aframe-look-at-component@0.8.0/dist/aframe-look-at-component.min.js"></script>
 
     <style>
-      /* スマホ画面手前に固定表示する2DのUIデザイン */
       body {
         margin: 0;
         overflow: hidden;
@@ -100,14 +99,14 @@
     </style>
 
     <script>
-      // 現在のキャラクターとセリフデータ
       var currentChar = null;
       var typeTimer = null;
 
       var charData = {
         freud: {
           name: "ジグムント・フロイト（精神分析）",
-          planeId: "plane-freud",
+          headId: "head-freud",
+          bodyId: "body-freud",
           voices: ["snd-f1", "snd-f2", "snd-f3"],
           scripts: [
             "こんにちはなのだ。精神分析の生みの親、ジグムント・フロイト先生なのだ。オーストリアの神経学者で、心の中に隠れた無意識の存在を世に広めた、近代心理学の超大物なのだ。",
@@ -117,7 +116,8 @@
         },
         jung: {
           name: "カール・ユング（分析心理学）",
-          planeId: "plane-jung",
+          headId: "head-jung",
+          bodyId: "body-jung",
           voices: ["snd-j1", "snd-j2", "snd-j3"],
           scripts: [
             "カール・ユング先生なのだ。スイスの精神科医で、最初はフロイト先生の一番弟子だったけれど、考え方の違いから独自に分析心理学を立ち上げた、心の深層を探求した学者なのだ。",
@@ -127,7 +127,8 @@
         },
         adler: {
           name: "アルフレッド・アドラー（個人心理学）",
-          planeId: "plane-adler",
+          headId: "head-adler",
+          bodyId: "body-adler",
           voices: ["snd-a1", "snd-a2", "snd-a3"],
           scripts: [
             "アルフレッド・アドラー先生なのだ。オーストリア出身で個人心理学を創始したのだ。現代では嫌われる勇気という本で大ブームになって、今や3人の中で一番有名かもしれないのだ。",
@@ -149,7 +150,6 @@
           var containerId = this.data.containerId;
 
           marker.addEventListener('markerFound', function () {
-            // 3Dモデルのポップアップ登場
             var container = document.getElementById(containerId);
             if (container) {
               container.setAttribute('scale', '0 0 0');
@@ -162,14 +162,11 @@
                 easing: 'easeOutElastic'
               });
             }
-
-            // 2D画面のUIを現在の偉人に切り替え
             activateCharacterUI(charKey);
           });
         }
       });
 
-      // UIの有効化と切り替え
       function activateCharacterUI(charKey) {
         if (currentChar !== charKey) {
           currentChar = charKey;
@@ -182,46 +179,58 @@
         }
       }
 
-      // コマンドボタンが押された時の音声＆字幕再生処理
+      // コマンドボタンが押された時の音声＆ペープサート会話アクション
       function selectChoice(index) {
         if (!currentChar) return;
         var info = charData[currentChar];
 
-        // 全音声を停止・リセット
         var allAudios = document.querySelectorAll('audio');
         allAudios.forEach(function (aud) {
           aud.pause();
           aud.currentTime = 0;
         });
 
-        // 該当する音声を再生
         var targetAudio = document.getElementById(info.voices[index]);
-        var charPlane = document.getElementById(info.planeId);
+        var headEl = document.getElementById(info.headId);
+        var bodyEl = document.getElementById(info.bodyId);
 
         if (targetAudio) {
           targetAudio.play();
 
-          // 喋っている間、偉人がピョコピョコ跳ねる演出
-          if (charPlane) {
-            charPlane.setAttribute('animation__talk', {
+          // 喋っている間、頭がコクコクと小刻みに上下し、体も少し弾む演出
+          if (headEl) {
+            headEl.setAttribute('animation__talk', {
+              property: 'position',
+              from: '0 0 0.03',
+              to: '0 0.06 0.03',
+              dir: 'alternate',
+              dur: 140,
+              loop: true
+            });
+          }
+          if (bodyEl) {
+            bodyEl.setAttribute('animation__talk', {
               property: 'scale',
               from: '1 1 1',
-              to: '1.08 0.94 1',
+              to: '1.04 0.97 1',
               dir: 'alternate',
-              dur: 180,
+              dur: 280,
               loop: true
             });
           }
 
           targetAudio.onended = function () {
-            if (charPlane) {
-              charPlane.removeAttribute('animation__talk');
-              charPlane.setAttribute('scale', '1 1 1');
+            if (headEl) {
+              headEl.removeAttribute('animation__talk');
+              headEl.setAttribute('position', '0 0 0.03');
+            }
+            if (bodyEl) {
+              bodyEl.removeAttribute('animation__talk');
+              bodyEl.setAttribute('scale', '1 1 1');
             }
           };
         }
 
-        // 字幕を1文字ずつタイプライター風に表示
         showSubtitle(info.scripts[index]);
       }
 
@@ -243,17 +252,14 @@
   </head>
 
   <body>
-    <!-- 画面上部のステータス案内 -->
     <div id="status-bar">QRコードをカメラに映して偉人を召喚しよう！</div>
 
-    <!-- 画面右側に固定表示される3つのコマンドボタン（100%確実に押せる） -->
     <div id="command-panel">
       <img src="balloon1.PNG" class="cmd-btn" onclick="selectChoice(0)" />
       <img src="balloon2.PNG" class="cmd-btn" onclick="selectChoice(1)" />
       <img src="balloon3.PNG" class="cmd-btn" onclick="selectChoice(2)" />
     </div>
 
-    <!-- 画面下部のRPG風メッセージ字幕枠 -->
     <div id="dialogue-box">
       <div id="speaker-name"></div>
       <div id="subtitle-text"></div>
@@ -270,45 +276,55 @@
     <audio id="snd-a2" src="a2.mp3"></audio>
     <audio id="snd-a3" src="a3.mp3"></audio>
 
-    <!-- AR空間 -->
     <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.8;" vr-mode-ui="enabled: false">
       <a-assets timeout="3000">
-        <img id="img-freud" src="freud.PNG" />
-        <img id="img-jung" src="jung.PNG" />
-        <img id="img-adler" src="adler.PNG" />
+        <!-- 自作した魔法陣PNG画像 -->
+        <img id="img-magic" src="magic.PNG" />
+        <!-- 頭と体を分けた6枚のPNG画像 -->
+        <img id="img-freud-head" src="freud_head.PNG" />
+        <img id="img-freud-body" src="freud_body.PNG" />
+        <img id="img-jung-head" src="jung_head.PNG" />
+        <img id="img-jung-body" src="jung_body.PNG" />
+        <img id="img-adler-head" src="adler_head.PNG" />
+        <img id="img-adler-body" src="adler_body.PNG" />
       </a-assets>
 
-      <!-- 1人目：フロイト（サイバーブルーの召喚陣） -->
+      <!-- 1人目：フロイト -->
       <a-marker id="marker-1" type="pattern" url="marker1.patt" emitevents="true" char-marker="charKey: freud; containerId: container-1">
         <a-entity id="container-1" scale="0 0 0">
-          <!-- 足元の回転する二重魔法陣 -->
-          <a-ring rotation="-90 0 0" radius-inner="0.65" radius-outer="0.75" color="#00ffff" material="shader: flat; opacity: 0.8; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 6000; easing: linear"></a-ring>
-          <a-ring rotation="-90 0 0" radius-inner="0.45" radius-outer="0.52" color="#0088ff" material="shader: flat; opacity: 0.6; side: double; wireframe: true;" animation="property: rotation; from: -90 0 360; to: -90 0 0; loop: true; dur: 4000; easing: linear"></a-ring>
-          <!-- カメラを向いてフワフワ浮遊するフロイト -->
-          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.1 0; to: 0 0.35 0; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine">
-            <a-plane id="plane-freud" src="#img-freud" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          <!-- 足元で回転する自作魔法陣PNG -->
+          <a-plane src="#img-magic" position="0 0 0" rotation="-90 0 0" width="1.6" height="1.6" material="transparent: true; alphaTest: 0.1; shader: flat; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 8000; easing: linear"></a-plane>
+          
+          <!-- カメラを向いて浮遊するペープサート本体 -->
+          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.15 0; to: 0 0.3 0; dir: alternate; dur: 1800; loop: true; easing: easeInOutSine">
+            <!-- 体パーツ（呼吸するようにゆっくり伸縮） -->
+            <a-plane id="body-freud" src="#img-freud-body" position="0 0 0" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__breathe="property: scale; from: 1 1 1; to: 1.02 0.98 1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine"></a-plane>
+            <!-- 頭パーツ（少し手前に配置し、左右にわずかに揺れる） -->
+            <a-plane id="head-freud" src="#img-freud-head" position="0 0 0.03" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__sway="property: rotation; from: 0 0 -3; to: 0 0 3; dir: alternate; dur: 2200; loop: true; easing: easeInOutSine"></a-plane>
           </a-entity>
         </a-entity>
       </a-marker>
 
-      <!-- 2人目：ユング（ミスティックパープルの召喚陣） -->
+      <!-- 2人目：ユング -->
       <a-marker id="marker-2" type="pattern" url="marker2.patt" emitevents="true" char-marker="charKey: jung; containerId: container-2">
         <a-entity id="container-2" scale="0 0 0">
-          <a-ring rotation="-90 0 0" radius-inner="0.65" radius-outer="0.75" color="#ff00ff" material="shader: flat; opacity: 0.8; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 6000; easing: linear"></a-ring>
-          <a-ring rotation="-90 0 0" radius-inner="0.45" radius-outer="0.52" color="#ffd700" material="shader: flat; opacity: 0.7; side: double; wireframe: true;" animation="property: rotation; from: -90 0 360; to: -90 0 0; loop: true; dur: 4000; easing: linear"></a-ring>
-          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.1 0; to: 0 0.35 0; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine">
-            <a-plane id="plane-jung" src="#img-jung" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          <a-plane src="#img-magic" position="0 0 0" rotation="-90 0 0" width="1.6" height="1.6" material="transparent: true; alphaTest: 0.1; shader: flat; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 8000; easing: linear"></a-plane>
+          
+          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.15 0; to: 0 0.3 0; dir: alternate; dur: 1800; loop: true; easing: easeInOutSine">
+            <a-plane id="body-jung" src="#img-jung-body" position="0 0 0" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__breathe="property: scale; from: 1 1 1; to: 1.02 0.98 1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine"></a-plane>
+            <a-plane id="head-jung" src="#img-jung-head" position="0 0 0.03" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__sway="property: rotation; from: 0 0 -3; to: 0 0 3; dir: alternate; dur: 2200; loop: true; easing: easeInOutSine"></a-plane>
           </a-entity>
         </a-entity>
       </a-marker>
 
-      <!-- 3人目：アドラー（エメラルドグリーンの召喚陣） -->
+      <!-- 3人目：アドラー -->
       <a-marker id="marker-3" type="pattern" url="marker3.patt" emitevents="true" char-marker="charKey: adler; containerId: container-3">
         <a-entity id="container-3" scale="0 0 0">
-          <a-ring rotation="-90 0 0" radius-inner="0.65" radius-outer="0.75" color="#00ff88" material="shader: flat; opacity: 0.8; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 6000; easing: linear"></a-ring>
-          <a-ring rotation="-90 0 0" radius-inner="0.45" radius-outer="0.52" color="#ffff00" material="shader: flat; opacity: 0.7; side: double; wireframe: true;" animation="property: rotation; from: -90 0 360; to: -90 0 0; loop: true; dur: 4000; easing: linear"></a-ring>
-          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.1 0; to: 0 0.35 0; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine">
-            <a-plane id="plane-adler" src="#img-adler" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;"></a-plane>
+          <a-plane src="#img-magic" position="0 0 0" rotation="-90 0 0" width="1.6" height="1.6" material="transparent: true; alphaTest: 0.1; shader: flat; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 8000; easing: linear"></a-plane>
+          
+          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.15 0; to: 0 0.3 0; dir: alternate; dur: 1800; loop: true; easing: easeInOutSine">
+            <a-plane id="body-adler" src="#img-adler-body" position="0 0 0" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__breathe="property: scale; from: 1 1 1; to: 1.02 0.98 1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine"></a-plane>
+            <a-plane id="head-adler" src="#img-adler-head" position="0 0 0.03" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__sway="property: rotation; from: 0 0 -3; to: 0 0 3; dir: alternate; dur: 2200; loop: true; easing: easeInOutSine"></a-plane>
           </a-entity>
         </a-entity>
       </a-marker>
