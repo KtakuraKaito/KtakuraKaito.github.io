@@ -17,7 +17,6 @@
         -webkit-user-select: none;
       }
 
-      /* 上部の案内バー */
       #status-bar {
         position: fixed;
         top: 15px;
@@ -36,7 +35,6 @@
         white-space: nowrap;
       }
 
-      /* 右側の3つのコマンドボタン配置エリア */
       #command-panel {
         position: fixed;
         right: 12px;
@@ -62,7 +60,6 @@
         transform: scale(0.92);
       }
 
-      /* 下部のRPG風セリフ字幕ウィンドウ */
       #dialogue-box {
         position: fixed;
         bottom: 20px;
@@ -135,7 +132,31 @@
         }
       };
 
-      // マーカー認識時の処理コンポーネント
+      AFRAME.registerComponent('keep-aspect', {
+        schema: {
+          baseHeight: { type: 'number', default: 1.4 }
+        },
+        init: function () {
+          var el = this.el;
+          var baseHeight = this.data.baseHeight;
+
+          function applyAspect() {
+            var srcSelector = el.getAttribute('src');
+            if (!srcSelector) return;
+            var img = document.querySelector(srcSelector);
+            if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
+              var aspect = img.naturalWidth / img.naturalHeight;
+              el.setAttribute('height', baseHeight);
+              el.setAttribute('width', baseHeight * aspect);
+            }
+          }
+
+          el.addEventListener('materialtextureloaded', applyAspect);
+          setTimeout(applyAspect, 100);
+          setTimeout(applyAspect, 600);
+        }
+      });
+
       AFRAME.registerComponent('char-marker', {
         schema: {
           charKey: { type: 'string' },
@@ -149,14 +170,15 @@
           marker.addEventListener('markerFound', function () {
             var container = document.getElementById(containerId);
             if (container) {
-              container.setAttribute('scale', '0 0 0');
+          
+              container.setAttribute('scale', '0.01 0.01 0.01');
               container.removeAttribute('animation__pop');
               container.setAttribute('animation__pop', {
                 property: 'scale',
-                from: '0 0 0',
+                from: '0.01 0.01 0.01',
                 to: '1 1 1',
-                dur: 700,
-                easing: 'easeOutElastic'
+                dur: 650,
+                easing: 'easeOutBack'
               });
             }
             activateCharacterUI(charKey);
@@ -176,33 +198,32 @@
         }
       }
 
-      // 通常の呼吸アニメーションを設定する関数
-      function setBreatheAnimation(el) {
+      function setIdleAnimation(el) {
         if (!el) return;
+        el.removeAttribute('animation__talkRot');
+        el.setAttribute('rotation', '0 0 0');
         el.setAttribute('animation__motion', {
           property: 'scale',
           from: '1 1 1',
-          to: '1.03 0.97 1',
+          to: '1.04 1.04 1',
           dir: 'alternate',
-          dur: 1400,
+          dur: 1500,
           loop: true,
           easing: 'easeInOutSine'
         });
       }
 
-      // コマンドボタンが押された時の音声＆会話アクション処理
       function selectChoice(index) {
         if (!currentChar) return;
         var info = charData[currentChar];
 
-        // すべての音声をリセットし、全員の動きを通常の呼吸に戻す
         var allAudios = document.querySelectorAll('audio');
         allAudios.forEach(function (aud) {
           aud.pause();
           aud.currentTime = 0;
         });
         ['plane-freud', 'plane-jung', 'plane-adler'].forEach(function (id) {
-          setBreatheAnimation(document.getElementById(id));
+          setIdleAnimation(document.getElementById(id));
         });
 
         var targetAudio = document.getElementById(info.voices[index]);
@@ -211,22 +232,29 @@
         if (targetAudio) {
           targetAudio.play();
 
-          // 喋っている間は、小刻みに元気よく跳ねる動きに切り替え
           if (charPlane) {
             charPlane.setAttribute('animation__motion', {
               property: 'scale',
               from: '1 1 1',
-              to: '1.08 0.93 1',
+              to: '1.07 1.07 1',
               dir: 'alternate',
-              dur: 160,
+              dur: 180,
               loop: true,
               easing: 'easeInOutQuad'
             });
+            charPlane.setAttribute('animation__talkRot', {
+              property: 'rotation',
+              from: '0 0 -4',
+              to: '0 0 4',
+              dir: 'alternate',
+              dur: 180,
+              loop: true,
+              easing: 'easeInOutSine'
+            });
           }
 
-          // 音声が終わったら再びゆっくりした呼吸アニメーションに戻す
           targetAudio.onended = function () {
-            setBreatheAnimation(charPlane);
+            setIdleAnimation(charPlane);
           };
         }
 
@@ -264,7 +292,6 @@
       <div id="subtitle-text"></div>
     </div>
 
-    <!-- 9個の音声ファイル -->
     <audio id="snd-f1" src="f1.mp3"></audio>
     <audio id="snd-f2" src="f2.mp3"></audio>
     <audio id="snd-f3" src="f3.mp3"></audio>
@@ -277,42 +304,38 @@
 
     <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; patternRatio: 0.8;" vr-mode-ui="enabled: false">
       <a-assets timeout="3000">
-        <!-- 自作した魔法陣PNG画像 -->
         <img id="img-magic" src="magic.PNG" />
-        <!-- 元の1枚絵3種 -->
         <img id="img-freud" src="freud.PNG" />
         <img id="img-jung" src="jung.PNG" />
         <img id="img-adler" src="adler.PNG" />
       </a-assets>
 
-      <!-- 1人目：フロイト -->
       <a-marker id="marker-1" type="pattern" url="marker1.patt" emitevents="true" char-marker="charKey: freud; containerId: container-1">
-        <a-entity id="container-1" scale="0 0 0">
-          <!-- 足元で回転する自作魔法陣PNG -->
+        <a-entity id="container-1" scale="0.01 0.01 0.01">
+       
           <a-plane src="#img-magic" position="0 0 0" rotation="-90 0 0" width="1.6" height="1.6" material="transparent: true; alphaTest: 0.1; shader: flat; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 8000; easing: linear"></a-plane>
-          <!-- 浮遊しながら呼吸するフロイト（1枚絵） -->
-          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.12 0; to: 0 0.32 0; dir: alternate; dur: 1600; loop: true; easing: easeInOutSine">
-            <a-plane id="plane-freud" src="#img-freud" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__motion="property: scale; from: 1 1 1; to: 1.03 0.97 1; dir: alternate; dur: 1400; loop: true; easing: easeInOutSine"></a-plane>
+       
+          <a-entity position="0 0.25 0" look-at="[camera]" animation__float="property: position; from: 0 0.15 0; to: 0 0.35 0; dir: alternate; dur: 1600; loop: true; easing: easeInOutSine">
+            <a-plane id="plane-freud" src="#img-freud" keep-aspect="baseHeight: 1.4" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__motion="property: scale; from: 1 1 1; to: 1.04 1.04 1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine"></a-plane>
           </a-entity>
         </a-entity>
       </a-marker>
 
-      <!-- 2人目：ユング -->
+
       <a-marker id="marker-2" type="pattern" url="marker2.patt" emitevents="true" char-marker="charKey: jung; containerId: container-2">
-        <a-entity id="container-2" scale="0 0 0">
+        <a-entity id="container-2" scale="0.01 0.01 0.01">
           <a-plane src="#img-magic" position="0 0 0" rotation="-90 0 0" width="1.6" height="1.6" material="transparent: true; alphaTest: 0.1; shader: flat; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 8000; easing: linear"></a-plane>
-          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.12 0; to: 0 0.32 0; dir: alternate; dur: 1600; loop: true; easing: easeInOutSine">
-            <a-plane id="plane-jung" src="#img-jung" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__motion="property: scale; from: 1 1 1; to: 1.03 0.97 1; dir: alternate; dur: 1400; loop: true; easing: easeInOutSine"></a-plane>
+          <a-entity position="0 0.25 0" look-at="[camera]" animation__float="property: position; from: 0 0.15 0; to: 0 0.35 0; dir: alternate; dur: 1600; loop: true; easing: easeInOutSine">
+            <a-plane id="plane-jung" src="#img-jung" keep-aspect="baseHeight: 1.4" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__motion="property: scale; from: 1 1 1; to: 1.04 1.04 1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine"></a-plane>
           </a-entity>
         </a-entity>
       </a-marker>
 
-      <!-- 3人目：アドラー -->
       <a-marker id="marker-3" type="pattern" url="marker3.patt" emitevents="true" char-marker="charKey: adler; containerId: container-3">
-        <a-entity id="container-3" scale="0 0 0">
+        <a-entity id="container-3" scale="0.01 0.01 0.01">
           <a-plane src="#img-magic" position="0 0 0" rotation="-90 0 0" width="1.6" height="1.6" material="transparent: true; alphaTest: 0.1; shader: flat; side: double;" animation="property: rotation; from: -90 0 0; to: -90 0 360; loop: true; dur: 8000; easing: linear"></a-plane>
-          <a-entity position="0 0.2 0" look-at="[camera]" animation__float="property: position; from: 0 0.12 0; to: 0 0.32 0; dir: alternate; dur: 1600; loop: true; easing: easeInOutSine">
-            <a-plane id="plane-adler" src="#img-adler" width="1.3" height="1.3" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__motion="property: scale; from: 1 1 1; to: 1.03 0.97 1; dir: alternate; dur: 1400; loop: true; easing: easeInOutSine"></a-plane>
+          <a-entity position="0 0.25 0" look-at="[camera]" animation__float="property: position; from: 0 0.15 0; to: 0 0.35 0; dir: alternate; dur: 1600; loop: true; easing: easeInOutSine">
+            <a-plane id="plane-adler" src="#img-adler" keep-aspect="baseHeight: 1.4" material="transparent: true; alphaTest: 0.5; shader: flat;" animation__motion="property: scale; from: 1 1 1; to: 1.04 1.04 1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine"></a-plane>
           </a-entity>
         </a-entity>
       </a-marker>
