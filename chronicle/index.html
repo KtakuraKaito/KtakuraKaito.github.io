@@ -287,10 +287,26 @@ const PAYDAY_INTERVAL = 30; // 給与・収入決済サイクル（30日ごと�
 const ECONOMY_MAX = 300; // v2: 城の経済上限（内政の無限膨張を止める）
 const ECONOMY_MIN = 50; // v6: 内政の下限（籠城で荒廃してもここまで）
 const SIEGE_ECONOMY_DAMAGE = 20; // v6: 城で戦闘が起きるたびの内政低下
+const DOMESTIC_COST_G = 50; // v7: 内政の金コスト（フェイズを終わらせず連打できる代わりに払う）
+const TRAIN_COST_G = 50; // v7: 訓練の金コスト
+const COMMAND_COSTS = { attack: 200, recruit: 100, distribute: 50, embezzle: 50, policy: 50, domestic: 50, train: 50 }; // v7: 戦略フェイズ行動の指導力コスト
+const TERRITORY_INCOME_PER_TILE = 2; // v7: 領地1マスあたりの月収入（勢力の君主の城の金庫へ）
+
+// v7: 指導力（城主でいる間、毎日 統率ぶん貯まる。戦略フェイズの全行動で消費する）
+function getCommand(o) { return Math.floor((o && o.command) || 0); }
+function spendCommand(o, cost) {
+    if (!o || getCommand(o) < cost) return false;
+    o.command = getCommand(o) - cost;
+    return true;
+}
+// v7: フェイズを終わらせない行動の後の画面・保存・同期リフレッシュ
+function refreshPhasePanel() { updateUI(); drawMap(); saveGame(); netSync(); }
 
 // v6: 籠城バフ（内政に比例。内政0で+0%、上限300で+50%）
 function getSiegeBuff(castle) {
-    return 1 + ((castle.economy || 0) / ECONOMY_MAX) * 0.5;
+    let buff = 1 + ((castle.economy || 0) / ECONOMY_MAX) * 0.5;
+    if (typeof isEncircled === 'function' && isEncircled(castle)) buff *= 0.85; // v7: 包囲されると補給が断たれ籠城バフ低下
+    return buff;
 }
 
 // v6: 実効守備力（表示・NPC判定用。乱数なし）
@@ -301,7 +317,7 @@ function getEffectiveDefense(castle) {
     if (lord && lord.trait === 'ironwall') eff *= 1.15;
     return Math.round(eff);
 }
-const SAVE_KEY = 'chronicle_of_betrayal_v6'; // v2: セーブデータのキー
+const SAVE_KEY = 'chronicle_of_betrayal_v7'; // v2: セーブデータのキー
 let nextFactionId = 6; // v2: 反乱などで新勢力を作るときの発番カウンタ
 const REBEL_COLORS = [
 { color: '#a855f7', bg: 'rgba(168, 85, 247, 0.25)' },
@@ -340,6 +356,7 @@ let gameState = {
     unifiedAchieved: false,
     endlessMode: false,
     mapGrid: [],
+    territory: [],
     castles: [],
     officers: [],
     armies: [],
@@ -492,7 +509,72 @@ function maybePersonalEvent(officer) {
 // --- v4 追加: 順位表 ---
 function officerScore(o) { return (o.merit || 0) + Math.floor((o.gold || 0) / 2) + Math.floor((o.troops || 0) / 10); }
 
+// v7: 部隊に指示を出せるのは、指揮官本人か、NPC指揮官を出した城の城主
+function canOrderArmy(army, officer) {
+    if (!army || army.type !== 'ATTACK' || !officer) return false;
+    const commander = gameState.officers.find(o => o.id === army.commanderId);
+    if (!commander) return false;
+    if (commander.id === officer.id) return true;
+    if (!isHuman(commander) && isCastleLord(officer) && officer.castleId === army.originCastleId) {
+    const originCastle = gameState.castles.find(c => c.id === army.originCastleId);
+    if (originCastle && originCastle.factionId === army.factionId) return true; // v7 review fix: an enemy lord who captured the origin castle gets no orders over its armies
+    }
+    return false;
+}
+
+// v7: 部隊指示の適用（目標変更・待機・帰還）。成功したら true
+function setArmyOrder(army, kind, targetCastleId) {
+    const commander = gameState.officers.find(o => o.id === army.commanderId);
+    const cmdName = commander ? commander.name : '部隊';
+    if (kind === 'WAIT') {
+        if (army.order === 'WAIT') return false; // v7 review fix: repeated identical orders are no-ops (log/sync spam)
+        army.order = 'WAIT';
+        addLog(`${cmdName} 隊は現在地で待機に入りました。`, 'info');
+        return true;
+    }
+    if (kind === 'RETURN') {
+        const origin = gameState.castles.find(c => c.id === army.originCastleId);
+        if (!origin || typeof army.posQ !== 'number') return false;
+        if (army.order === 'RETURN') return false; // v7 review fix: same as WAIT
+        army.order = 'RETURN';
+        army.targetCastleId = origin.id;
+        army.path = findPath(army.posQ, army.posR, origin.q, origin.r, army.factionId);
+        army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId));
+        addLog(`${cmdName} 隊に ${origin.name} への帰還命令が出ました。`, 'info');
+        return true;
+    }
+    if (kind === 'ADVANCE') {
+        const target = gameState.castles.find(c => c.id === targetCastleId);
+        if (!target || typeof army.posQ !== 'number') return false;
+        if (target.id === army.targetCastleId && army.order !== 'WAIT') return false;
+        army.order = 'ADVANCE';
+        army.targetCastleId = target.id;
+        army.path = findPath(army.posQ, army.posR, target.q, target.r, army.factionId);
+        army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId));
+        addLog(`${cmdName} 隊の目標が ${target.name} に変更されました。`, 'info');
+        return true;
+    }
+    return false;
+}
+
+// v7: 部隊指示の入口（ゲストはホストへ送信、ホスト・ローカルは即適用）
+function actionArmyOrder(armyId, kind, targetCastleId) {
+    if (gameState.netMode === 'guest') {
+        if (netHostConn && netHostConn.open !== false) {
+            try { netHostConn.send({ type: 'order', armyId, kind, targetCastleId: (typeof targetCastleId === 'number') ? targetCastleId : null }); } catch (e) { /* noop */ }
+        }
+        return;
+    }
+    if (typeof isHostRemoteLock === 'function' && isHostRemoteLock()) return;
+    const army = gameState.armies.find(a => a.id === armyId);
+    const viewer = getPlayer();
+    if (!army || !canOrderArmy(army, viewer)) return;
+    if (setArmyOrder(army, kind, targetCastleId)) { saveGame(); netSync(); }
+}
+
 function openArmiesModal() {
+    const viewer = getPlayer();
+    const locked = (typeof isHostRemoteLock === 'function') && isHostRemoteLock();
     const rows = gameState.armies.slice().sort((a, b) => a.daysLeft - b.daysLeft).map(army => {
         const origin = gameState.castles.find(c => c.id === army.originCastleId);
         const target = gameState.castles.find(c => c.id === army.targetCastleId);
@@ -500,10 +582,49 @@ function openArmiesModal() {
         const faction = FACTIONS[army.factionId];
         const troops = army.type === 'ATTACK' ? army.troops : (commander ? commander.troops : 0);
         const kind = army.type === 'ATTACK' ? '⚔ 攻撃' : '🐎 移動';
-        return `<div class="flex items-center justify-between bg-slate-900/70 border border-slate-800 rounded px-3 py-1.5 text-xs"><span><span class="font-bold ${army.type === 'ATTACK' ? 'text-rose-300' : 'text-sky-300'}">${kind}</span> <span style="color:${faction ? faction.color : '#e2e8f0'}" class="font-bold">${faction ? faction.name : '不明'}</span> <span class="font-bold text-slate-100">${commander ? commander.name : '不明'} 隊</span> <span class="text-slate-400">${origin ? origin.name : '?'} → ${target ? target.name : '?'}</span></span><span class="font-bold text-amber-300">${troops} 兵 / 残${army.daysLeft}日</span></div>`;
+        const orderText = army.type !== 'ATTACK' ? '' : (army.order === 'WAIT' ? ' / 待機中' : (army.order === 'RETURN' ? ' / 帰還中' : ''));
+        const stats = commander ? `武${commander.valor} 統${commander.leadership}` : '';
+        const remainText = army.order === 'WAIT' ? '待機中' : `残${army.daysLeft}日`;
+        let orderBtns = '';
+        if (army.type === 'ATTACK' && !locked && canOrderArmy(army, viewer)) {
+            orderBtns = `<div class="mt-1.5 flex gap-1.5"><button data-order="target" data-army="${army.id}" class="btn-action px-2 py-1 rounded bg-indigo-700 text-white text-[11px] font-bold">目標変更</button>${army.order === 'WAIT' ? `<button data-order="resume" data-army="${army.id}" class="btn-action px-2 py-1 rounded bg-emerald-700 text-white text-[11px] font-bold">進軍再開</button>` : `<button data-order="wait" data-army="${army.id}" class="btn-action px-2 py-1 rounded bg-slate-600 text-white text-[11px] font-bold">待機</button>`}<button data-order="return" data-army="${army.id}" class="btn-action px-2 py-1 rounded bg-amber-700 text-white text-[11px] font-bold">帰還</button></div>`;
+        }
+        return `<div class="bg-slate-900/70 border border-slate-800 rounded px-3 py-1.5 text-xs"><div class="flex items-center justify-between"><span><span class="font-bold ${army.type === 'ATTACK' ? 'text-rose-300' : 'text-sky-300'}">${kind}</span> <span style="color:${faction ? faction.color : '#e2e8f0'}" class="font-bold">${faction ? faction.name : '不明'}</span> <span class="font-bold text-slate-100">${commander ? commander.name : '不明'} 隊</span> <span class="text-slate-500">${stats}</span> <span class="text-slate-400">${origin ? origin.name : '?'} → ${target ? target.name : '?'}${orderText}</span></span><span class="font-bold text-amber-300">${troops} 兵 / ${remainText}</span></div>${orderBtns}</div>`;
     }).join('');
     const html = rows ? `<div class="space-y-2 max-h-[60vh] overflow-y-auto pr-1">${rows}</div>` : '<p class="text-slate-400 text-sm">現在、出陣中・移動中の部隊はありません。</p>';
     showModal('出陣中・移動中の部隊', html, [{ text: '閉じる', class: 'bg-slate-700 text-slate-200', onClick: closeModal }]);
+    document.querySelectorAll('#modal-body [data-order]').forEach(btn => {
+        btn.onclick = () => {
+            const armyId = btn.getAttribute('data-army');
+            const kind = btn.getAttribute('data-order');
+            if (kind === 'target') { openArmyTargetModal(armyId); return; }
+            if (kind === 'wait') actionArmyOrder(armyId, 'WAIT', null);
+            else if (kind === 'resume') { const a = gameState.armies.find(x => x.id === armyId); actionArmyOrder(armyId, 'ADVANCE', a ? a.targetCastleId : null); }
+            else if (kind === 'return') actionArmyOrder(armyId, 'RETURN', null);
+            closeModal();
+        };
+    });
+}
+
+// v7: 部隊の目標変更先を選ぶモーダル
+function openArmyTargetModal(armyId) {
+    const army = gameState.armies.find(a => a.id === armyId);
+    if (!army) return;
+    const commander = gameState.officers.find(o => o.id === army.commanderId);
+    let html = `<p class="text-xs text-slate-400 mb-2">${commander ? commander.name : '部隊'} 隊の新しい目標を選んでください。自勢力の城へは部隊を移駐できます。出発した城へ戻る場合は「帰還」を使ってください。</p><div class="space-y-2">`;
+    gameState.castles.filter(c => c.id !== army.originCastleId && c.id !== army.targetCastleId).forEach(c => {
+        const f = FACTIONS[c.factionId];
+        const d = (typeof army.posQ === 'number') ? calcDistance(army.posQ, army.posR, c.q, c.r) : 0;
+        html += `<button data-target-castle="${c.id}" class="btn-action w-full text-left bg-slate-900/70 border border-slate-800 rounded px-3 py-2 text-xs"><span class="font-bold text-slate-100">${c.name}</span> <span style="color:${f ? f.color : '#e2e8f0'}">${f ? f.name : ''}</span> <span class="text-slate-400">現在地から ${d} マス / 駐留 ${getCastleTroops(c.id)} 兵</span></button>`;
+    });
+    html += '</div>';
+    showModal('目標の変更', html, [{ text: '戻る', class: 'bg-slate-700 text-slate-200', onClick: () => openArmiesModal() }]);
+    document.querySelectorAll('#modal-body [data-target-castle]').forEach(btn => {
+        btn.onclick = () => {
+            actionArmyOrder(armyId, 'ADVANCE', Number(btn.getAttribute('data-target-castle')));
+            closeModal();
+        };
+    });
 }
 
 function openStandingsModal() {
@@ -551,13 +672,13 @@ function renderHumansBar() {
 }
 
 // --- v5 追加: オンライン対戦（PeerJS・ホスト権威方式） ---
-const NET_PREFIX = 'cob-v5-';
-const NET_ACTION_WHITELIST = ['actionEnlist', 'actionDomesticAffairs', 'actionTrain', 'actionRelocate', 'actionBribeSabotage', 'actionResign', 'actionRecruit', 'actionDistributeFunds', 'actionEmbezzle', 'actionLaunchAttack', 'actionSetFactionPolicy'];
+const NET_PREFIX = 'cob-v7-';
+const NET_ACTION_WHITELIST = ['actionEnlist', 'actionDomesticAffairs', 'actionTrain', 'actionRelocate', 'actionBribeSabotage', 'actionResign', 'actionRecruit', 'actionDistributeFunds', 'actionEmbezzle', 'actionLaunchAttack', 'actionSetFactionPolicy', 'actionStrategyDomestic', 'actionStrategyTrain'];
 const NET_ACTION_PHASE = {
     actionEnlist: 'PERSONAL', actionDomesticAffairs: 'PERSONAL', actionTrain: 'PERSONAL',
     actionRelocate: 'PERSONAL', actionBribeSabotage: 'PERSONAL', actionResign: 'PERSONAL',
     actionRecruit: 'STRATEGY', actionDistributeFunds: 'STRATEGY', actionEmbezzle: 'STRATEGY',
-    actionSetFactionPolicy: 'STRATEGY', actionLaunchAttack: null
+    actionSetFactionPolicy: 'STRATEGY', actionStrategyDomestic: 'STRATEGY', actionStrategyTrain: 'STRATEGY', actionLaunchAttack: null
 };
 let netPeer = null;
 let netHostConn = null;
@@ -600,6 +721,7 @@ function netSnapshot() {
         officers: gameState.officers,
         armies: gameState.armies,
         terrainIds: gameState.mapGrid.map(row => row.map(c => c.terrain.id)),
+        territoryIds: gameState.territory,
         factions: FACTIONS,
         nextFactionId,
         humans: gameState.humans,
@@ -648,6 +770,7 @@ function netApplySnapshot(d) {
     gameState.officers = d.officers;
     gameState.armies = d.armies || [];
     gameState.mapGrid = (d.terrainIds || []).map((row, r) => row.map((tid, q) => ({ q, r, terrain: terrainById[tid] || TERRAIN.PLAIN })));
+    gameState.territory = (Array.isArray(d.territoryIds) && d.territoryIds.length) ? d.territoryIds : gameState.territory;
     Object.keys(FACTIONS).forEach(k => delete FACTIONS[k]);
     Object.assign(FACTIONS, d.factions || {});
     nextFactionId = d.nextFactionId || 6;
@@ -709,8 +832,20 @@ function netSetupHostConn(conn) {
 }
 
 function netHandleGuestData(officerId, msg) {
+    // v7 review fix: any message from the watched remote player resets the AFK deadline (no forced skip mid-play)
+    if (netAfkKey && (netAfkKey === 'P:' + officerId || netAfkKey === 'A:' + officerId)) netAfkDeadline = Date.now() + NET_AFK_LIMIT_MS;
     if (msg.type === 'begin') {
         if (gameState.pendingPhase && gameState.pendingPhase.officerId === officerId) beginHumanPhase();
+    } else if (msg.type === 'finish') {
+        // v7: ゲスト本人のフェイズ終了だけを受け付ける
+        if (gameState.activeOfficerId === officerId && gameState.activePhase) finishPlayerPhase();
+    } else if (msg.type === 'order') {
+        // v7: ゲストからの部隊指示（指揮官本人か、出撃元の城主のみ許可）
+        const army = gameState.armies.find(a => a.id === msg.armyId);
+        const sender = gameState.officers.find(o => o.id === officerId);
+        if (army && sender && canOrderArmy(army, sender) && (msg.kind === 'WAIT' || msg.kind === 'RETURN' || msg.kind === 'ADVANCE')) {
+            if (setArmyOrder(army, msg.kind, msg.targetCastleId)) { saveGame(); netSync(); }
+        }
     } else if (msg.type === 'action') {
         if (!NET_ACTION_WHITELIST.includes(msg.name)) return;
         if (gameState.activeOfficerId !== officerId) return;
@@ -748,6 +883,8 @@ function netCreateRoom() {
         netSetStatus(`ルームを作成しました。参加コード: ${code} を相手に伝えてください。`);
         updateNetPanel();
         updateUI();
+        netStartAfkWatchdog();
+        if (gameState.setupDone) netEnableOnlineAuto();
         if (!gameState.setupDone) { closeNetModal(); showSetup(); }
     });
     netPeer.on('connection', (conn) => netSetupHostConn(conn));
@@ -812,6 +949,64 @@ function netSkipRemotePhase() {
     startAutoTimer();
     updateUI();
     updateNetPanel();
+}
+
+// v7: リモート参加者のフェイズが進行中かどうか（ホストはその間、閲覧のみ）
+function isHostRemoteLock() {
+    if (gameState.netMode !== 'host') return false;
+    if (!gameState.activePhase || !gameState.activeOfficerId) return false;
+    const o = gameState.officers.find(x => x.id === gameState.activeOfficerId);
+    return !!(o && o.control === 'remote');
+}
+
+// v7: オンラインホスト中は世界を自動進行させる（止まるのは人間のフェイズの間だけ）
+function netEnableOnlineAuto() {
+    if (gameState.netMode !== 'host') return;
+    gameState.autoPlay = true;
+    gameState.autoHalted = false;
+    updateAutoButton();
+    startAutoTimer();
+}
+
+// v7: リモートフェイズの放置対策（120秒で自動スキップ）
+let netAfkTimer = null;
+let netAfkKey = null;
+let netAfkDeadline = 0;
+const NET_AFK_LIMIT_MS = 120000;
+
+function netStartAfkWatchdog() {
+    if (netAfkTimer) return;
+    netAfkTimer = setInterval(netAfkTick, 1000);
+}
+
+function netAfkTick() {
+    try {
+        if (gameState.netMode !== 'host') { netAfkKey = null; return; }
+        let key = null;
+        let officer = null;
+        let isPending = false;
+        if (gameState.pendingPhase) {
+            const o = gameState.officers.find(x => x.id === gameState.pendingPhase.officerId);
+            if (o && o.control === 'remote') { key = 'P:' + o.id; officer = o; isPending = true; }
+        } else if (gameState.activePhase && gameState.activeOfficerId) {
+            const o = gameState.officers.find(x => x.id === gameState.activeOfficerId);
+            if (o && o.control === 'remote') { key = 'A:' + o.id; officer = o; }
+        }
+        if (!key) {
+            if (netAfkKey) { netAfkKey = null; if (gameState.netCode) netSetStatus(`ルーム作成中（参加コード: ${gameState.netCode}）。世界は自動で進行します。`); }
+            return;
+        }
+        if (key !== netAfkKey) { netAfkKey = key; netAfkDeadline = Date.now() + NET_AFK_LIMIT_MS; }
+        const remain = netAfkDeadline - Date.now();
+        if (remain <= 0) {
+            netAfkKey = null;
+            // v7 review fix: exactly one skip log (netSkipRemotePhase logs its own)
+            if (isPending) netSkipRemotePhase();
+            else { addLog(`${officer.name} のフェイズが制限時間を超えたため、自動でスキップしました（オンライン）。`, 'warn'); finishPlayerPhase(); }
+            return;
+        }
+        netSetStatus(`${officer.name} のフェイズです（自動スキップまで約 ${Math.ceil(remain / 1000)} 秒）`);
+    } catch (e) { /* noop */ }
 }
 
 
@@ -907,27 +1102,185 @@ return Math.max(1, Math.floor(baseGain * factor));
 
 // 行軍日数: 距離×4日に、指揮官の統率補正と中間マスの地形補正を加える
 function calcTravelInfo(origin, target, commander) {
+// v7: マス目移動ベースの予想到着日数（経路コスト合計 ÷ 1日の移動力）
 const dist = calcDistance(origin.q, origin.r, target.q, target.r);
-let factor = 1.0;
-if (commander) {
-if (commander.leadership >= 85) factor = 0.75;
-else if (commander.leadership >= 70) factor = 0.9;
-}
-let terrainBonus = 0;
-let terrainName = '平原';
+let days = Math.max(1, dist);
 if (gameState.mapGrid.length > 0) {
-const midQ = Math.round((origin.q + target.q) / 2);
-const midR = Math.round((origin.r + target.r) / 2);
-const cell = gameState.mapGrid[midR] && gameState.mapGrid[midR][midQ];
-if (cell) {
-if (cell.terrain.id === 3) { terrainBonus = 2; terrainName = '河川';}
-else if (cell.terrain.id === 2) { terrainBonus = 2; terrainName = '山岳';}
-else if (cell.terrain.id === 1) { terrainBonus = 1; terrainName = '森';}
+const path = findPath(origin.q, origin.r, target.q, target.r, origin.factionId || 0);
+days = Math.max(1, estimateDaysForPath(path, commander, origin.factionId || 0));
+}
+return { dist, days, terrainBonus: 0, terrainName: '経路', factor: 1 };
+}
+
+// --- v7 追加: マス目移動（ヘックス経路探索。座標系は odd-r オフセットで calcDistance と一致） ---
+const HEX_DIRS_EVEN = [[1, 0], [0, -1], [-1, -1], [-1, 0], [-1, 1], [0, 1]];
+const HEX_DIRS_ODD = [[1, 0], [1, -1], [0, -1], [-1, 0], [0, 1], [1, 1]];
+
+function hexNeighbors(q, r) {
+const dirs = (r % 2 === 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
+const out = [];
+for (const d of dirs) {
+const nq = q + d[0], nr = r + d[1];
+if (nq >= 0 && nq < MAP_COLS && nr >= 0 && nr < MAP_ROWS) out.push({ q: nq, r: nr });
+}
+return out;
+}
+
+function getTerritory(q, r) {
+if (!gameState.territory || !gameState.territory[r]) return 0;
+return gameState.territory[r][q] || 0;
+}
+
+function terrainMoveCost(terrain) {
+if (!terrain) return 1;
+if (terrain.id === 3) return 3; // 河川
+if (terrain.id === 1 || terrain.id === 2) return 2; // 森・山岳
+return 1; // 平原
+}
+
+function tileEnterCost(q, r, factionId) {
+if (gameState.castles.some(c => c.q === q && c.r === r)) return 1; // 城マスは常に1
+const cell = gameState.mapGrid[r] && gameState.mapGrid[r][q];
+let cost = terrainMoveCost(cell ? cell.terrain : null);
+if (factionId) {
+const owner = getTerritory(q, r);
+if (owner && owner !== factionId) cost += 1; // 敵地は補給が悪く重い
+}
+return cost;
+}
+
+function findPath(sq, sr, tq, tr, factionId) {
+if (sq === tq && sr === tr) return [];
+const key = (q, r) => r * MAP_COLS + q;
+const dist = new Map();
+const prev = new Map();
+dist.set(key(sq, sr), 0);
+const pq = [[0, sq, sr]];
+while (pq.length > 0) {
+let bi = 0;
+for (let i = 1; i < pq.length; i++) if (pq[i][0] < pq[bi][0]) bi = i;
+const cur = pq.splice(bi, 1)[0];
+const d = cur[0], q = cur[1], r = cur[2];
+if (d > (dist.has(key(q, r)) ? dist.get(key(q, r)) : Infinity)) continue;
+if (q === tq && r === tr) break;
+for (const n of hexNeighbors(q, r)) {
+// v7 review fix: castle tiles other than start/target are impassable (no routing through enemy castles)
+if (!(n.q === tq && n.r === tr) && gameState.castles.some(c => c.q === n.q && c.r === n.r)) continue;
+const nd = d + tileEnterCost(n.q, n.r, factionId);
+const k = key(n.q, n.r);
+if (nd < (dist.has(k) ? dist.get(k) : Infinity)) {
+dist.set(k, nd);
+prev.set(k, { q: q, r: r });
+pq.push([nd, n.q, n.r]);
 }
 }
-let days = Math.max(2, Math.round(dist * DAYS_PER_HEX * factor) + terrainBonus);
-if (commander && commander.trait === 'swift') days = Math.max(2, Math.round(days * 0.8));
-return { dist, days, terrainBonus, terrainName, factor};
+}
+if (!prev.has(key(tq, tr))) return [];
+const path = [];
+let cur = { q: tq, r: tr };
+while (!(cur.q === sq && cur.r === sr)) {
+path.unshift(cur);
+cur = prev.get(key(cur.q, cur.r));
+if (!cur) return [];
+}
+return path;
+}
+
+function pathTotalCost(path, factionId) {
+return (path || []).reduce((s, t) => s + tileEnterCost(t.q, t.r, factionId), 0);
+}
+
+// v7: 1日の移動力（統率で2〜4、神速で1.5倍）
+function calcMovePoints(commander) {
+let base = 2;
+if (commander) {
+if (commander.leadership >= 85) base = 4;
+else if (commander.leadership >= 65) base = 3;
+if (commander.trait === 'swift') base = Math.round(base * 1.5); // v7 review fix: was floor, which made swift useless in the leadership 65-84 band
+}
+return Math.max(1, base);
+}
+
+function estimateDaysForPath(path, commander, factionId) {
+// v7 review fix: replay the real movement rules (daily points, no carry-over, min 1 tile) so estimates match actual travel
+if (!path || path.length === 0) return 0;
+const pointsPerDay = calcMovePoints(commander);
+let days = 1;
+let points = pointsPerDay;
+let movedToday = false;
+for (const t of path) {
+const cost = tileEnterCost(t.q, t.r, factionId);
+if (cost > points && movedToday) { days++; points = pointsPerDay; movedToday = false; }
+points = (cost > points) ? 0 : points - cost;
+movedToday = true;
+}
+return days;
+}
+
+// v7: 部隊に現在マスと経路を持たせる
+function initArmyRoute(army) {
+const target = gameState.castles.find(c => c.id === army.targetCastleId);
+const commander = gameState.officers.find(o => o.id === army.commanderId);
+// v7 review fix: legacy armies without an origin fall back to the commander's castle, then the target (never (0,0))
+const origin = gameState.castles.find(c => c.id === army.originCastleId)
+|| (commander && commander.castleId !== null && commander.castleId !== undefined ? gameState.castles.find(c => c.id === commander.castleId) : null)
+|| target;
+army.posQ = origin ? origin.q : 0;
+army.posR = origin ? origin.r : 0;
+if (!army.order) army.order = 'ADVANCE';
+army.path = (origin && target) ? findPath(origin.q, origin.r, target.q, target.r, army.factionId) : [];
+const est = estimateDaysForPath(army.path, commander, army.factionId);
+army.totalDays = Math.max(1, est);
+army.daysLeft = army.totalDays;
+}
+
+// --- v7 追加: 陣取り（マス領地） ---
+function setTerritory(q, r, factionId) {
+if (!gameState.territory || !gameState.territory[r]) return;
+gameState.territory[r][q] = factionId;
+}
+
+function initTerritory() {
+gameState.territory = [];
+for (let r = 0; r < MAP_ROWS; r++) {
+const row = [];
+for (let q = 0; q < MAP_COLS; q++) row.push(0);
+gameState.territory.push(row);
+}
+// v7 review fix: castle tiles first, then rings claim only unclaimed tiles (processing order must not steal a neighbour castle's ring)
+gameState.castles.forEach(castle => setTerritory(castle.q, castle.r, castle.factionId));
+gameState.castles.forEach(castle => {
+hexNeighbors(castle.q, castle.r).forEach(n => { if (getTerritory(n.q, n.r) === 0) setTerritory(n.q, n.r, castle.factionId); });
+});
+}
+
+function countTerritory(factionId) {
+let n = 0;
+if (!gameState.territory) return 0;
+gameState.territory.forEach(row => row.forEach(v => { if (v === factionId) n++; }));
+return n;
+}
+
+// v7: 城の周囲マスがすべて敵勢力の領地なら包囲状態
+function isEncircled(castle) {
+const ns = hexNeighbors(castle.q, castle.r);
+if (ns.length === 0) return false;
+return ns.every(n => {
+const owner = getTerritory(n.q, n.r);
+return owner !== 0 && owner !== castle.factionId;
+});
+}
+
+// v7: 1日の終わりに部隊が止まっているマスをその勢力の領地にする（兵力300以上、城マスは除く）
+function processTerritoryClaims() {
+gameState.armies.forEach(army => {
+if (army.type !== 'ATTACK') return;
+if (army.order === 'RETURN') return; // v7 review fix: returning armies do not claim territory
+if ((army.troops || 0) < 300) return;
+if (typeof army.posQ !== 'number') return;
+if (gameState.castles.some(c => c.q === army.posQ && c.r === army.posR)) return;
+setTerritory(army.posQ, army.posR, army.factionId);
+});
 }
 
 // 出撃の供出計画: 指揮官は私兵の全て、他の駐留武将は半分を供出する
@@ -987,12 +1340,19 @@ if (totalRemainder <= 0 ||!army.troops) return;
 const contributions = (army.contributions && army.contributions.length > 0)
 ? army.contributions
 : [{ officerId: army.commanderId, amount: army.troops}];
+// v7 review fix: contributors now serving an enemy faction receive nothing (ronin contributors still do)
+const eligible = contributions.filter(c => {
+const o = gameState.officers.find(x => x.id === c.officerId);
+if (!o) return false;
+if (o.castleId === null || o.castleId === undefined) return true;
+const oc = gameState.castles.find(x => x.id === o.castleId);
+return !oc || oc.factionId === army.factionId;
+});
 let distributed = 0;
-contributions.forEach((c, idx) => {
+eligible.forEach((c, idx) => {
 const officer = gameState.officers.find(o => o.id === c.officerId);
-if (!officer) return;
 let share;
-if (idx === contributions.length - 1) share = totalRemainder - distributed;
+if (idx === eligible.length - 1) share = totalRemainder - distributed;
 else share = Math.floor(totalRemainder * (c.amount / army.troops));
 officer.troops = (officer.troops || 0) + Math.max(0, share);
 distributed += Math.max(0, share);
@@ -1021,11 +1381,13 @@ castles: gameState.castles,
 officers: gameState.officers,
 armies: gameState.armies,
 terrainIds: gameState.mapGrid.map(row => row.map(c => c.terrain.id)),
+territoryIds: gameState.territory,
 factions: FACTIONS,
 nextFactionId,
 humans: gameState.humans,
 viewOfficerId: gameState.viewOfficerId,
-setupDone: gameState.setupDone
+setupDone: gameState.setupDone,
+dayResumeIdx: (typeof gameState.dayResumeIdx === 'number') ? gameState.dayResumeIdx : null
 };
 localStorage.setItem(SAVE_KEY, JSON.stringify(data));
 } catch (e) { /* 保存できない環境では無視する */}
@@ -1048,12 +1410,15 @@ gameState.castles = data.castles;
 gameState.officers = data.officers;
 gameState.armies = data.armies || [];
 gameState.mapGrid = restoredGrid;
+gameState.territory = (Array.isArray(data.territoryIds) && data.territoryIds.length === MAP_ROWS) ? data.territoryIds : null;
+if (!gameState.territory) initTerritory();
 Object.keys(FACTIONS).forEach(k => delete FACTIONS[k]);
 Object.assign(FACTIONS, data.factions);
 nextFactionId = data.nextFactionId || 6;
 gameState.humans = Array.isArray(data.humans) ? data.humans : [];
 gameState.viewOfficerId = data.viewOfficerId || (gameState.humans[0] && gameState.humans[0].officerId) || null;
 gameState.setupDone = data.setupDone !== false;
+gameState.dayResumeIdx = (typeof data.dayResumeIdx === 'number') ? data.dayResumeIdx : null;
 if (gameState.endlessMode) {
 document.getElementById('endless-banner').classList.remove('hidden');
 }
@@ -1104,6 +1469,7 @@ function initGame() {
 gameState.mapGrid[c.r][c.q].terrain = TERRAIN.PLAIN;
 c.lastNpcAttackDay = -999;
 });
+    initTerritory(); // v7: 初期領地（各城のマス＋周囲1マス）
 
     const player = {
         id: 'h1',
@@ -1241,7 +1607,15 @@ function advanceOneDay() {
         return;
     }
 
+    // v7 review fix: a day interrupted by a human phase resumes where it stopped (no double day advance / world processing)
+    const resumingDay = typeof gameState.dayResumeIdx === 'number';
+    if (!resumingDay) {
     gameState.day++;
+
+    // v7: 指導力の蓄積（城主でいる間、毎日その城主の統率ぶん貯まる。上限なし）
+    gameState.officers.forEach(o => {
+        if (isCastleLord(o)) o.command = getCommand(o) + (o.leadership || 0);
+    });
 
     if (gameState.day % 10 === 0) {
         gameState.officers.forEach(o => {
@@ -1261,10 +1635,14 @@ function advanceOneDay() {
 
     processArmiesMovement();
     processFieldBattles();
+    processTerritoryClaims();
     syncCastleLords();
     checkPlayerStatusEvents();
+    }
 
-    for (const officer of gameState.officers) {
+    const startOfficerIdx = resumingDay ? gameState.dayResumeIdx : 0;
+    for (let oi = startOfficerIdx; oi < gameState.officers.length; oi++) {
+        const officer = gameState.officers[oi];
         if (officer.isMoving) continue;
 
         const interval = calcActionInterval(officer);
@@ -1278,6 +1656,7 @@ function advanceOneDay() {
             if (isHuman(officer)) {
                 pauseAutoTimer();
                 gameState.pendingPhase = { officerId: officer.id, type: 'PERSONAL' };
+                gameState.dayResumeIdx = oi + 1;
                 saveGame();
                 if (officer.control === 'remote') { netSync(); updateUI(); } else { showHandover(); }
                 return;
@@ -1292,6 +1671,7 @@ function advanceOneDay() {
                 if (isHuman(officer)) {
                     pauseAutoTimer();
                     gameState.pendingPhase = { officerId: officer.id, type: 'STRATEGY' };
+                    gameState.dayResumeIdx = oi + 1;
                     saveGame();
                     if (officer.control === 'remote') { netSync(); updateUI(); } else { showHandover(); }
                     return;
@@ -1302,6 +1682,7 @@ function advanceOneDay() {
         }
     }
 
+    gameState.dayResumeIdx = null;
      checkUnification();
 updateUI();
 drawMap();
@@ -1354,6 +1735,26 @@ addLog(`配下 ${member.name} への給料が払えず不満が爆発してい�
 
 checkCastleRebellion(castle);
 });
+
+// v7: 領地収入（勢力の領地マス数 × 2G を、その勢力の君主の城の金庫へ）
+Object.keys(FACTIONS).forEach(k => {
+const fid = Number(k);
+if (fid === 0) return;
+const tiles = countTerritory(fid);
+if (tiles === 0) return;
+let ruler = null;
+let rulerCastle = null;
+gameState.castles.filter(c => c.factionId === fid).forEach(c => {
+const l = getCastleLord(c.id);
+if (l && (!ruler || l.merit > ruler.merit)) { ruler = l; rulerCastle = c; }
+});
+if (ruler && rulerCastle) {
+const gain = tiles * TERRITORY_INCOME_PER_TILE;
+rulerCastle.treasury += gain;
+if (isHuman(ruler)) addLog(`領地収入: ${tiles}マス × ${TERRITORY_INCOME_PER_TILE}G = +${gain}G が ${rulerCastle.name} の金庫に入りました。`, 'good');
+}
+});
+
 runWorldEvent();
 maybeVisitor();
 }
@@ -1396,6 +1797,7 @@ showModal(
 }
 
 castle.factionId = newFactionId;
+setTerritory(castle.q, castle.r, newFactionId); // v7: 反乱でも城マスの領地が移る
  leader.merit = oldLordMerit + 50;
 leader.loyalty = 100;
 rebels.forEach(r => { r.loyalty = 85;});
@@ -1406,13 +1808,11 @@ syncCastleLords();
 
 // v6: 野戦（会敵）。敵対する攻撃部隊同士がフィールド上で接近したら戦闘する
 function armyFieldPos(army, daysLeftOverride) {
-    const origin = gameState.castles.find(c => c.id === army.originCastleId);
-    const target = gameState.castles.find(c => c.id === army.targetCastleId);
-    if (!origin || !target) return null;
-    const dl = (typeof daysLeftOverride === 'number') ? daysLeftOverride : army.daysLeft;
-    const td = Math.max(1, army.totalDays || 1);
-    const progress = Math.min(1, Math.max(0, (td - dl) / td));
-    return { q: origin.q + (target.q - origin.q) * progress, r: origin.r + (target.r - origin.r) * progress };
+// v7: 部隊はマス単位で存在するので現在マスをそのまま返す
+if (army && typeof army.posQ === 'number') return { q: army.posQ, r: army.posR };
+const origin = gameState.castles.find(c => c.id === army.originCastleId);
+if (!origin) return null;
+return { q: origin.q, r: origin.r };
 }
 
 function axialDistance(a, b) {
@@ -1428,20 +1828,12 @@ function processFieldBattles() {
             const A = attacks[i], B = attacks[j];
             if (A.factionId === B.factionId) continue;
             if (fought.has(A.id) || fought.has(B.id)) continue;
+            if (A.order === 'RETURN' || B.order === 'RETURN') continue; // v7 review fix: returning armies do not fight
+            if (A._foughtDay === gameState.day || B._foughtDay === gameState.day) continue; // v7 review fix: one field battle per army per day
             if (!gameState.armies.includes(A) || !gameState.armies.includes(B)) continue;
-            const aNow = armyFieldPos(A), aPrev = armyFieldPos(A, A.daysLeft + 1);
-            const bNow = armyFieldPos(B), bPrev = armyFieldPos(B, B.daysLeft + 1);
-            if (!aNow || !bNow) continue;
-            let dMin = axialDistance(aNow, bNow);
-            if (aPrev && bPrev) {
-                for (let s = 0; s <= 4; s++) {
-                    const t = s / 4;
-                    const pa = { q: aPrev.q + (aNow.q - aPrev.q) * t, r: aPrev.r + (aNow.r - aPrev.r) * t };
-                    const pb = { q: bPrev.q + (bNow.q - bPrev.q) * t, r: bPrev.r + (bNow.r - bPrev.r) * t };
-                    dMin = Math.min(dMin, axialDistance(pa, pb));
-                }
-            }
-            if (dMin <= 1.5) {
+            if (typeof A.posQ !== 'number' || typeof B.posQ !== 'number') continue;
+            // v7: マス単位の会敵（同じマスか隣接マスで野戦）
+            if (calcDistance(A.posQ, A.posR, B.posQ, B.posR) <= 1) {
                 resolveFieldBattle(A, B);
                 fought.add(A.id);
                 fought.add(B.id);
@@ -1478,6 +1870,7 @@ function resolveFieldBattle(armyA, armyB) {
 
     const rawRemain = Math.floor(winner.troops * (1 - lPow / (wPow * 1.4)));
     winner.troops = isFinite(rawRemain) ? Math.max(150, rawRemain) : 150;
+    winner._foughtDay = gameState.day; // v7 review fix: one field battle per army per day
     if (wCmd) wCmd.merit += meritGainFor(wCmd, 60);
 
     addLog(`${wCmd ? wCmd.name : '部隊'}隊（${FACTIONS[winner.factionId]?.name || '不明'}）が野戦で ${lCmd ? lCmd.name : '敵'}隊（${FACTIONS[loser.factionId]?.name || '不明'}）を破りました！敗れた部隊は壊滅し、勝者は${winner.troops}兵で進軍を継続します。`, 'warn');
@@ -1489,37 +1882,90 @@ function resolveFieldBattle(armyA, armyB) {
     }
 }
 function processArmiesMovement() {
-    for (let i = gameState.armies.length - 1; i >= 0; i--) {
-        const army = gameState.armies[i];
-        army.daysLeft--;
+    // v7 review fix: iterate over a snapshot (a field battle during movement may remove other armies)
+    const snapshot = gameState.armies.slice();
+    for (const army of snapshot) {
+        if (!gameState.armies.includes(army)) continue;
+        // v7: 経路を持たない部隊（旧形式）は現在地から引き直す
+        if (typeof army.posQ !== 'number' || !Array.isArray(army.path)) initArmyRoute(army);
+        const commander = gameState.officers.find(o => o.id === army.commanderId);
+        const targetCastle = gameState.castles.find(c => c.id === army.targetCastleId);
 
-        if (army.daysLeft <= 0) {
-            const targetCastle = gameState.castles.find(c => c.id === army.targetCastleId);
-            const commander = gameState.officers.find(o => o.id === army.commanderId);
+        if (army.order === 'WAIT') continue; // 待機中は動かない（その場で野戦は起こる）
 
-            if (commander) {
-                commander.isMoving = false;
-            }
-
-            if (army.type === 'RELOCATE') {
-                if (targetCastle && targetCastle.factionId === army.factionId && commander) {
-                    commander.castleId = targetCastle.id;
-                    if (isHuman(commander)) {
-                        addLog(`${commander.name}が${targetCastle.name}へ到着し、配属が完了しました。`, 'good');
-                    }
-                    syncCastleLords();
-                } else if (commander) {
-                    commander.castleId = null;
-                    if (isHuman(commander)) {
-                        addLog(`${commander.name}の目的地 ${targetCastle?.name} はすでに敵手に落ちており、浪人となりました。`, 'warn');
-                    }
+        let points = calcMovePoints(commander);
+        let moved = false;
+        let arrived = false;
+        let destroyed = false;
+        let foughtToday = false;
+        while (points > 0 && army.path.length > 0) {
+            const next = army.path[0];
+            const cost = tileEnterCost(next.q, next.r, army.factionId);
+            if (cost > points && moved) break;
+            // その日まだ動いていない場合は、コスト超過でも1マスは進む（最低保証）
+            points = (cost > points) ? 0 : points - cost;
+            army.posQ = next.q;
+            army.posR = next.r;
+            army.path.shift();
+            moved = true;
+            // v7 review fix: 移動の途中で敵部隊と近接したら、その場で野戦（城前の迎撃や行き違いの会敵が成立する）
+            if (army.type === 'ATTACK' && army.order !== 'RETURN' && army._foughtDay !== gameState.day) {
+                const foe = gameState.armies.find(a => a !== army && a.type === 'ATTACK' && a.order !== 'RETURN' && a.factionId !== army.factionId && a._foughtDay !== gameState.day && typeof a.posQ === 'number' && calcDistance(army.posQ, army.posR, a.posQ, a.posR) <= 1);
+                if (foe) {
+                    resolveFieldBattle(army, foe);
+                    foughtToday = true;
+                    if (!gameState.armies.includes(army)) { destroyed = true; break; }
+                    break; // 勝ってもその日は行軍停止（隊列の立て直し）
                 }
-            } else if (army.type === 'ATTACK') {
-                resolveSiegeBattle(army, targetCastle, commander);
             }
-
-            gameState.armies.splice(i, 1);
+            if (targetCastle && next.q === targetCastle.q && next.r === targetCastle.r) { arrived = true; break; }
         }
+        if (destroyed) continue;
+        if (!arrived && !foughtToday && targetCastle && army.posQ === targetCastle.q && army.posR === targetCastle.r) arrived = true;
+
+        army.daysLeft = army.path.length === 0 ? 0 : estimateDaysForPath(army.path, commander, army.factionId);
+
+        if (arrived) {
+            arriveArmy(army);
+            const ai = gameState.armies.indexOf(army);
+            if (ai >= 0) gameState.armies.splice(ai, 1);
+        }
+    }
+}
+
+// v7: 部隊の到着処理（目標マスに着いた時点で解決する）
+function arriveArmy(army) {
+    const targetCastle = gameState.castles.find(c => c.id === army.targetCastleId);
+    const commander = gameState.officers.find(o => o.id === army.commanderId);
+    if (commander) commander.isMoving = false;
+
+    if (army.order === 'RETURN') {
+        distributeArmyRemainder(army, army.troops);
+        if (commander) {
+            const originCastle = gameState.castles.find(c => c.id === army.originCastleId);
+            commander.castleId = (originCastle && originCastle.factionId === army.factionId) ? originCastle.id : null;
+            if (commander.castleId === null) addLog(`${commander.name}の帰還先 ${originCastle ? originCastle.name : '城'} は既に陥落しており、浪人となりました。`, 'warn');
+            else if (isHuman(commander)) addLog(`${commander.name} 隊が ${originCastle.name} へ帰還しました。`, 'good');
+        }
+        syncCastleLords();
+        return;
+    }
+
+    if (army.type === 'RELOCATE') {
+        if (targetCastle && targetCastle.factionId === army.factionId && commander) {
+            commander.castleId = targetCastle.id;
+            if (isHuman(commander)) {
+                addLog(`${commander.name}が${targetCastle.name}へ到着し、配属が完了しました。`, 'good');
+            }
+            syncCastleLords();
+        } else if (commander) {
+            commander.castleId = null;
+            if (isHuman(commander)) {
+                addLog(`${commander.name}の目的地 ${targetCastle ? targetCastle.name : '城'} はすでに敵手に落ちており、浪人となりました。`, 'warn');
+            }
+        }
+    } else if (army.type === 'ATTACK') {
+        resolveSiegeBattle(army, targetCastle, commander);
     }
 }
 
@@ -1553,12 +1999,13 @@ const playerInvolved = (commander && isHuman(commander)) || defenders.some(d => 
 if (atkPower > defPower) {
 const remainingTroops = Math.max(150, Math.floor(army.troops * (1 - defPower / (atkPower * 1.4))));
 targetCastle.factionId = army.factionId;
+setTerritory(targetCastle.q, targetCastle.r, army.factionId); // v7: 落城した城マスも領地が移る
 
 // 防御側の私兵は比率で損害を受け、生き残りは城を追われて浪人になる
 defenders.forEach(d => {
 d.troops = Math.max(80, Math.floor((d.troops || 0) * 0.55));
 d.castleId = null;
-d.merit = Math.floor(d.merit * 0.5);
+// v7: 戦闘で負けて浪人になっても功績は半減しない（仕様変更。下野と反乱の半減は従来どおり）
 d.nextStrategyDay = null;
 if (isHuman(d)) {
 addLog(`${d.name}が守備していた ${targetCastle.name} が陥落！浪人となりました。`, 'danger');
@@ -1623,7 +2070,8 @@ addLog(`${targetCastle.name}の守備隊が ${factionName} の侵攻を退けま
 // v6: 内政の荒廃は戦闘解決後に適用する（今回の戦闘の籠城バフは戦闘前の内政で計算済み）
 if (defTroops > 0 && targetCastle.economy > ECONOMY_MIN) {
 const ecoBefore = targetCastle.economy;
-targetCastle.economy = Math.max(ECONOMY_MIN, targetCastle.economy - SIEGE_ECONOMY_DAMAGE);
+const ecoDamage = isEncircled(targetCastle) ? 30 : SIEGE_ECONOMY_DAMAGE; // v7: 包囲下では荒廃が進む
+targetCastle.economy = Math.max(ECONOMY_MIN, targetCastle.economy - ecoDamage);
 addLog(`${targetCastle.name}は戦火により荒廃し、内政が低下しました（${ecoBefore} → ${targetCastle.economy}）。`, 'warn');
 }
 }
@@ -1661,23 +2109,23 @@ if (!castle) return;
 
 const members = getCastleOfficers(castle.id).filter(m => m.id!== lord.id);
 const lowLoyaltyMember = members.find(m => m.loyalty < 65);
-if (lowLoyaltyMember && castle.treasury >= 120) {
+if (lowLoyaltyMember && castle.treasury >= 120 && spendCommand(lord, COMMAND_COSTS.distribute)) {
 castle.treasury -= 100;
 lowLoyaltyMember.loyalty = Math.min(100, lowLoyaltyMember.loyalty + 20);
 lowLoyaltyMember.gold += 50;
 }
 
 // v2: 徴兵は城プールではなく城主自身の私兵を増やす
-if ((lord.troops || 0) < 2600 && castle.treasury >= 200) {
+if ((lord.troops || 0) < 2600 && castle.treasury >= 200 && spendCommand(lord, COMMAND_COSTS.recruit)) {
 castle.treasury -= 150;
 lord.troops = (lord.troops || 0) + 400;
 return;
 }
 
-// v2: 出陣は間引く（確率0.18、城兵力3200以上、前回から45日以上、戦力が見合う相手だけ）
+// v7: 出陣の間引きは指導力コスト（200）が担う（城兵力3200以上、前回から45日以上、戦力が見合う相手だけ）
 const castleTroops = getCastleTroops(castle.id);
 const sinceLast = gameState.day - (typeof castle.lastNpcAttackDay === 'number'? castle.lastNpcAttackDay: -999);
-if (castleTroops >= 3200 && sinceLast >= 45 && Math.random() < 0.18) {
+if (castleTroops >= 3200 && sinceLast >= 45 && getCommand(lord) >= COMMAND_COSTS.attack) {
 const faction = FACTIONS[castle.factionId];
 let targetCastle = null;
 let chosenPlan = null;
@@ -1721,6 +2169,7 @@ const travel = calcTravelInfo(castle, targetCastle, chosenCommander);
 chosenCommander.isMoving = true;
 if (chosenCommander.id === lord.id) lord.nextStrategyDay = null;
 castle.lastNpcAttackDay = gameState.day;
+lord.command = getCommand(lord) - COMMAND_COSTS.attack;
 
 gameState.armies.push({
 id: 'army_' + Date.now() + Math.random(),
@@ -1736,6 +2185,7 @@ r: castle.r,
 totalDays: travel.days,
 daysLeft: travel.days
 });
+initArmyRoute(gameState.armies[gameState.armies.length - 1]);
 
 addLog(`${FACTIONS[castle.factionId].name}の ${chosenCommander.name} 隊（${chosenPlan.total}兵）が ${targetCastle.name} へ進軍開始（到着まで${travel.days}日）`, 'warn');
 syncCastleLords();
@@ -1777,9 +2227,20 @@ function beginHumanPhase() {
 }
 
 function finishPlayerPhase() {
+// v7: ゲストのフェイズ終了はホストへ通知して初めて成立する（以前はローカルで消えるだけで進まなかった）
+if (gameState.netMode === 'guest') {
+if (netHostConn && netHostConn.open !== false) { try { netHostConn.send({ type: 'finish' }); } catch (e) { /* noop */ } }
+return;
+}
+const finishedOfficer = gameState.officers.find(o => o.id === gameState.activeOfficerId);
+const finishedPhaseType = gameState.activePhase;
 gameState.activePhase = null;
 gameState.activeOfficerId = null;
 syncCastleLords();
+// v7 review fix: an officer promoted to castle lord during their personal phase still gets a strategy phase this cycle
+if (finishedOfficer && finishedPhaseType === 'PERSONAL' && !finishedOfficer.isMoving && finishedOfficer.nextStrategyDay === null && isCastleLord(finishedOfficer)) {
+finishedOfficer.nextStrategyDay = gameState.day + Math.floor(calcActionInterval(finishedOfficer) / 2);
+}
 updateUI();
 drawMap();
 checkPlayerStatusEvents();
@@ -1807,34 +2268,77 @@ function actionEnlist(castleId) {
     finishPlayerPhase();
 }
 
-function actionDomesticAffairs() {
-    if (netGuestGate('actionDomesticAffairs', [])) return;
-const player = getPlayer();
+// v7: 内政の実処理（個人・戦略共通）。コストは呼び出し側で払う
+function doDomesticWork(player) {
 const castle = gameState.castles.find(c => c.id === player.castleId);
 if (!castle) return;
-
 const ecoGain = calcEcoGain(Math.max(5, Math.floor(player.intellect / 12)) * (player.trait === 'domestic' ? 1.3 : 1.0), castle);
-const meritGain = meritGainFor(player, Math.max(20, Math.floor(player.intellect / 2.2)));
-
+// v7 review fix: domestic work with zero effect (economy already capped) grants no merit either
+const meritGain = ecoGain === 0 ? 0 : meritGainFor(player, Math.max(20, Math.floor(player.intellect / 2.2)));
 castle.economy = Math.min(ECONOMY_MAX, castle.economy + ecoGain);
 player.merit += meritGain;
-
 if (ecoGain === 0) {
-addLog(`${castle.name}で内政を実施。経済は上限（${ECONOMY_MAX}）に達しているため増えず、功績 +${meritGain}pt！`, 'good');
+addLog(`${castle.name}で内政を実施しましたが、経済は上限（${ECONOMY_MAX}）に達しており効果がありませんでした。`, 'warn');
 } else {
 addLog(`${castle.name}で内政を実施。城の経済 +${ecoGain}、功績 +${meritGain}pt！`, 'good');
 }
-finishPlayerPhase();
+syncCastleLords();
+}
+
+function actionDomesticAffairs() {
+    if (netGuestGate('actionDomesticAffairs', [])) return;
+    const player = getPlayer();
+    if (!player || player.castleId === null) return;
+    const homeCastleD = gameState.castles.find(c => c.id === player.castleId);
+    if (homeCastleD && homeCastleD.economy >= ECONOMY_MAX) { addLog(`${homeCastleD.name}の経済は既に上限（${ECONOMY_MAX}）です。内政の必要はありません。`, 'warn'); updateUI(); return; }
+    if ((player.gold || 0) < DOMESTIC_COST_G) { addLog(`内政には ${DOMESTIC_COST_G}G が必要です（所持金不足）。`, 'warn'); updateUI(); return; }
+    player.gold -= DOMESTIC_COST_G;
+    doDomesticWork(player);
+    refreshPhasePanel();
+}
+
+// v7: 戦略フェイズでも内政ができる（金＋指導力）
+function actionStrategyDomestic() {
+    if (netGuestGate('actionStrategyDomestic', [])) return;
+    const player = getPlayer();
+    if (!player || player.castleId === null) return;
+    const homeCastleS = gameState.castles.find(c => c.id === player.castleId);
+    if (homeCastleS && homeCastleS.economy >= ECONOMY_MAX) { addLog(`${homeCastleS.name}の経済は既に上限（${ECONOMY_MAX}）です。内政の必要はありません。`, 'warn'); updateUI(); return; }
+    if ((player.gold || 0) < DOMESTIC_COST_G) { addLog(`内政には ${DOMESTIC_COST_G}G が必要です（所持金不足）。`, 'warn'); updateUI(); return; }
+    if (!spendCommand(player, COMMAND_COSTS.domestic)) { addLog(`指導力が不足しています（内政には ${COMMAND_COSTS.domestic} 必要）。`, 'warn'); updateUI(); return; }
+    player.gold -= DOMESTIC_COST_G;
+    doDomesticWork(player);
+    refreshPhasePanel();
 }
 
 // v2: 訓練（仕様4.2）。自分の私兵を直接強化する。少ないうちほど伸びが大きい
-function actionTrain() {
-    if (netGuestGate('actionTrain', [])) return;
-const player = getPlayer();
+// v7: 訓練の実処理（個人・戦略共通）
+function doTrainWork(player) {
 const gain = calcTrainGain(player);
 player.troops = (player.troops || 0) + gain;
 addLog(`私兵を訓練し、兵力が +${gain} 増えました（現在 ${player.troops} 兵）。`, 'good');
-finishPlayerPhase();
+}
+
+function actionTrain() {
+    if (netGuestGate('actionTrain', [])) return;
+const player = getPlayer();
+if (!player || player.castleId === null) return;
+if ((player.gold || 0) < TRAIN_COST_G) { addLog(`訓練には ${TRAIN_COST_G}G が必要です（所持金不足）。`, 'warn'); updateUI(); return; }
+player.gold -= TRAIN_COST_G;
+doTrainWork(player);
+refreshPhasePanel();
+}
+
+// v7: 戦略フェイズの訓練（金＋指導力）
+function actionStrategyTrain() {
+    if (netGuestGate('actionStrategyTrain', [])) return;
+    const player = getPlayer();
+    if (!player || player.castleId === null) return;
+    if ((player.gold || 0) < TRAIN_COST_G) { addLog(`訓練には ${TRAIN_COST_G}G が必要です（所持金不足）。`, 'warn'); updateUI(); return; }
+    if (!spendCommand(player, COMMAND_COSTS.train)) { addLog(`指導力が不足しています（訓練には ${COMMAND_COSTS.train} 必要）。`, 'warn'); updateUI(); return; }
+    player.gold -= TRAIN_COST_G;
+    doTrainWork(player);
+    refreshPhasePanel();
 }
 
 function actionRelocate(targetCastleId) {
@@ -1863,6 +2367,7 @@ r: origin.r,
 totalDays: travelDays,
 daysLeft: travelDays
 });
+initArmyRoute(gameState.armies[gameState.armies.length - 1]);
 
 addLog(`${target.name}へ向けて移動を開始しました（到着まで${travelDays}日）。`, 'info');
 closeModal();
@@ -1913,25 +2418,29 @@ function actionResign() {
 function actionRecruit() {
     if (netGuestGate('actionRecruit', [])) return;
 const player = getPlayer();
+if (!player) return;
 const castle = gameState.castles.find(c => c.id === player.castleId);
 const cost = 150;
 if (!castle || castle.treasury < cost) return;
+if (!spendCommand(player, COMMAND_COSTS.recruit)) { addLog(`指導力が不足しています（徴兵には ${COMMAND_COSTS.recruit} 必要）。`, 'warn'); updateUI(); return; }
 
 castle.treasury -= cost;
 player.troops = (player.troops || 0) + 400;
 addLog(`${castle.name}の共有資金で自分の私兵を 400 徴兵しました（現在 ${player.troops} 兵）。`, 'good');
-finishPlayerPhase();
+refreshPhasePanel();
 }
 
 function actionDistributeFunds() {
     if (netGuestGate('actionDistributeFunds', [])) return;
     const player = getPlayer();
+    if (!player) return;
     const castle = gameState.castles.find(c => c.id === player.castleId);
     const cost = 150;
     if (!castle || castle.treasury < cost) return;
 
     const subordinates = getCastleOfficers(castle.id).filter(m => m.id !== player.id);
     if (subordinates.length === 0) return;
+    if (!spendCommand(player, COMMAND_COSTS.distribute)) { addLog(`指導力が不足しています（資金分配には ${COMMAND_COSTS.distribute} 必要）。`, 'warn'); updateUI(); return; }
 
     castle.treasury -= cost;
     const share = Math.floor(cost / subordinates.length);
@@ -1941,24 +2450,27 @@ function actionDistributeFunds() {
     });
 
     addLog(`共有資金から ${cost}G を配下に分配し、忠誠心を回復させました！`, 'good');
-    finishPlayerPhase();
+    refreshPhasePanel();
 }
 
 function actionEmbezzle() {
     if (netGuestGate('actionEmbezzle', [])) return;
 const player = getPlayer();
+if (!player) return;
 const castle = gameState.castles.find(c => c.id === player.castleId);
 const amount = player.trait === 'wealth' ? 300 : 200;
 if (!castle || castle.treasury < amount) return;
+if (!spendCommand(player, COMMAND_COSTS.embezzle)) { addLog(`指導力が不足しています（横領には ${COMMAND_COSTS.embezzle} 必要）。`, 'warn'); updateUI(); return; }
 
 castle.treasury -= amount;
 player.gold += amount;
 
 // v2: 横領そのものに罰則はないが、噂が広まり配下の忠誠が少し下がる
-const subordinates = getCastleOfficers(castle.id).filter(m => m.id!== player.id);
-subordinates.forEach(s => { s.loyalty = Math.max(0, s.loyalty - loyaltyLossFor(s, 4));});
+const subordinates = getCastleOfficers(castle.id).filter(m => m.id !== player.id);
+subordinates.forEach(s => { s.loyalty = Math.max(0, s.loyalty - loyaltyLossFor(s, 4)); });
 
 addLog(`${castle.name}の共有資金から ${amount}G を私財に引き出しました。（噂が広まり配下の忠誠 -4）`, 'warn');
+// v7 review fix: embezzling converts shared funds into private gold, so it ends the strategy phase (pre-v7 behaviour; blocks same-phase conversion loops)
 finishPlayerPhase();
 }
 
@@ -1970,6 +2482,21 @@ const commander = gameState.officers.find(o => o.id === commanderId);
 if (!origin ||!target ||!commander) return;
 if (target.factionId === origin.factionId) return; // 同勢力の城は攻撃できない（モーダル側でも除外済み）
 if (commander.castleId !== originCastleId || commander.isMoving) return; // 指揮官は出撃元の城に駐留する武将のみ（Copilotレビュー指摘）
+// v7 review fix: inside a phase, the sortie must belong to the phase owner (no launching other castles' or other officers' armies)
+if (gameState.activeOfficerId) {
+if (mode === 'independent' && commanderId !== gameState.activeOfficerId) return;
+if (mode === 'strategy') {
+const activeOfficer = gameState.officers.find(o => o.id === gameState.activeOfficerId);
+if (!activeOfficer || activeOfficer.castleId !== originCastleId) return;
+}
+}
+
+// v7: 戦略出陣は指導力200を消費する（支払うのは戦略フェイズの主＝城主）
+let commandPayer = null;
+if (mode === 'strategy') {
+commandPayer = gameState.officers.find(o => o.id === gameState.activeOfficerId) || commander;
+if (!commandPayer || getCommand(commandPayer) < COMMAND_COSTS.attack) { addLog(`指導力が不足しています（出陣には ${COMMAND_COSTS.attack} 必要）。`, 'warn'); updateUI(); return; }
+}
 
 let contributions;
 let sendTroops;
@@ -1986,6 +2513,8 @@ sendTroops = plan.total;
 if (sendTroops < 300) return;
 }
 
+if (commandPayer) commandPayer.command = getCommand(commandPayer) - COMMAND_COSTS.attack;
+
 contributions.forEach(c => {
 const o = gameState.officers.find(x => x.id === c.officerId);
 if (o) o.troops = Math.max(0, (o.troops || 0) - c.amount);
@@ -1994,7 +2523,7 @@ if (o) o.troops = Math.max(0, (o.troops || 0) - c.amount);
 const travel = calcTravelInfo(origin, target, commander);
 
 commander.isMoving = true;
-if (commander.id === getPlayer().id) {
+if (gameState.activeOfficerId && commander.id === gameState.activeOfficerId) {
 commander.nextStrategyDay = null;
 }
 
@@ -2012,23 +2541,31 @@ r: origin.r,
 totalDays: travel.days,
 daysLeft: travel.days
 });
+initArmyRoute(gameState.armies[gameState.armies.length - 1]);
 
 addLog(`${origin.name}より ${commander.name} 隊（${sendTroops}兵）が出撃！`, 'phase');
 closeModal();
+// v7: 指揮官本人が出る場合はフェイズ終了。城主が他人を派遣した場合は戦略フェイズを続行できる
+if (mode === 'independent' || (commandPayer && commander.id === commandPayer.id)) {
 finishPlayerPhase();
+} else {
+refreshPhasePanel();
+}
 }
 
 function actionSetFactionPolicy(targetCastleId) {
     if (netGuestGate('actionSetFactionPolicy', [targetCastleId])) return;
     const player = getPlayer();
+    if (!player) return;
     const castle = gameState.castles.find(c => c.id === player.castleId);
     if (!castle) return;
 
+    if (!spendCommand(player, COMMAND_COSTS.policy)) { addLog(`指導力が不足しています（方針設定には ${COMMAND_COSTS.policy} 必要）。`, 'warn'); updateUI(); return; }
     FACTIONS[castle.factionId].targetCastleId = targetCastleId;
     const target = gameState.castles.find(c => c.id === targetCastleId);
     addLog(`【君主大方針】勢力全体の攻撃目標を「${target.name}」に設定しました！`, 'phase');
     closeModal();
-    finishPlayerPhase();
+    refreshPhasePanel();
 }
 
 function checkUnification() {
@@ -2177,12 +2714,13 @@ addActionButton(btnsEl, '⏳ 様子を見る (パス)', 'bg-slate-700 text-slate
 } else {
 const castle = gameState.castles.find(c => c.id === player.castleId);
 descEl.textContent = `${castle.name}に仕官中。私兵 ${player.troops || 0} 兵。内政と訓練で力を蓄え、独立出陣もできます。`;
-addActionButton(btnsEl, '🌾 内政 (経済・功績UP)', 'bg-emerald-600 text-white', () => actionDomesticAffairs());
-addActionButton(btnsEl, '🗡️ 訓練 (私兵UP)', 'bg-orange-600 text-white', () => actionTrain());
+addActionButton(btnsEl, `🌾 内政 (${DOMESTIC_COST_G}G / 経済・功績UP)`, 'bg-emerald-600 text-white', () => actionDomesticAffairs(), player.gold < DOMESTIC_COST_G);
+addActionButton(btnsEl, `🗡️ 訓練 (${TRAIN_COST_G}G / 私兵UP)`, 'bg-orange-600 text-white', () => actionTrain(), player.gold < TRAIN_COST_G);
 addActionButton(btnsEl, '⚔️ 独立出陣 (自分の私兵で出撃)', 'bg-rose-600 text-white', () => openIndependentAttackModal(), Math.floor((player.troops || 0) * 0.9) < 300);
 addActionButton(btnsEl, '🐎 自勢力の他城へ移動', 'bg-sky-600 text-white', () => openRelocateModal());
 addActionButton(btnsEl, '💰 資金工作 (120G)', 'bg-purple-700 text-white', () => openSabotageModal(), player.gold < 120);
 addActionButton(btnsEl, '🚪 下野する (功績半減)', 'bg-rose-800 text-rose-100', () => openResignModal());
+addActionButton(btnsEl, '⏭️ 個人フェイズ終了', 'bg-slate-700 text-slate-200 col-span-2', () => finishPlayerPhase());
 }
 } else if (gameState.activePhase === 'STRATEGY') {
 const castle = gameState.castles.find(c => c.id === player.castleId);
@@ -2190,16 +2728,24 @@ const ruler = isFactionRuler(player);
 titleEl.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>戦略フェイズ（${ruler? '君主': '城主'}特権）`;
 badgeEl.textContent = '戦略指揮';
 badgeEl.className = 'text-[11px] px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-600';
-descEl.textContent = `共有資金: ${castle.treasury}G / 駐留兵力（私兵合計）: ${getCastleTroops(castle.id)}兵。横領や給与未払いに注意しながら国を運営してください。`;
+descEl.textContent = `共有資金: ${castle.treasury}G / 駐留兵力（私兵合計）: ${getCastleTroops(castle.id)}兵 / 指導力: ${getCommand(player)}（出陣${COMMAND_COSTS.attack}・徴兵${COMMAND_COSTS.recruit}・その他${COMMAND_COSTS.domestic}。毎日 統率ぶん貯まります）。横領や給与未払いに注意しながら国を運営してください。`;
 
-addActionButton(btnsEl, '⚔️ 出陣命令', 'bg-rose-600 text-white font-bold', () => openAttackModal());
-addActionButton(btnsEl, '🛡️ 徴兵 (自分の私兵 +400 / 150G)', 'bg-sky-600 text-white', () => actionRecruit(), castle.treasury < 150);
-addActionButton(btnsEl, '🎁 資金分配 (忠誠UP / 150G)', 'bg-emerald-600 text-white', () => actionDistributeFunds(), castle.treasury < 150);
-addActionButton(btnsEl, '💼 横領 (+200G / 配下の忠誠-4)', 'bg-amber-600 text-slate-950 font-bold', () => actionEmbezzle(), castle.treasury < 200);
+addActionButton(btnsEl, `⚔️ 出陣命令 (指導力${COMMAND_COSTS.attack})`, 'bg-rose-600 text-white font-bold', () => openAttackModal(), getCommand(player) < COMMAND_COSTS.attack);
+addActionButton(btnsEl, `🛡️ 徴兵 (私兵+400 / 150G / 指導力${COMMAND_COSTS.recruit})`, 'bg-sky-600 text-white', () => actionRecruit(), castle.treasury < 150 || getCommand(player) < COMMAND_COSTS.recruit);
+addActionButton(btnsEl, `🎁 資金分配 (忠誠UP / 150G / 指導力${COMMAND_COSTS.distribute})`, 'bg-emerald-600 text-white', () => actionDistributeFunds(), castle.treasury < 150 || getCommand(player) < COMMAND_COSTS.distribute);
+addActionButton(btnsEl, `💼 横領 (+200G / 配下の忠誠-4 / 指導力${COMMAND_COSTS.embezzle})`, 'bg-amber-600 text-slate-950 font-bold', () => actionEmbezzle(), castle.treasury < 200 || getCommand(player) < COMMAND_COSTS.embezzle);
+addActionButton(btnsEl, `🌾 内政 (指導力${COMMAND_COSTS.domestic} / ${DOMESTIC_COST_G}G)`, 'bg-emerald-700 text-white', () => actionStrategyDomestic(), getCommand(player) < COMMAND_COSTS.domestic || player.gold < DOMESTIC_COST_G);
+addActionButton(btnsEl, `🗡️ 訓練 (指導力${COMMAND_COSTS.train} / ${TRAIN_COST_G}G)`, 'bg-orange-700 text-white', () => actionStrategyTrain(), getCommand(player) < COMMAND_COSTS.train || player.gold < TRAIN_COST_G);
 if (ruler) {
-addActionButton(btnsEl, '🚩 君主大方針の設定', 'bg-indigo-600 text-white col-span-2', () => openPolicyModal());
+addActionButton(btnsEl, `🚩 君主大方針の設定 (指導力${COMMAND_COSTS.policy})`, 'bg-indigo-600 text-white col-span-2', () => openPolicyModal(), getCommand(player) < COMMAND_COSTS.policy);
 }
 addActionButton(btnsEl, '⏭️ 戦略フェイズ終了', 'bg-slate-700 text-slate-200 col-span-2', () => finishPlayerPhase());
+}
+
+// v7: オンラインで相手（リモート）のフェイズ中は、ホストは閲覧のみ（相手の武将を操作できないようにする）
+if (isHostRemoteLock()) {
+btnsEl.querySelectorAll('button').forEach(b => { b.disabled = true; });
+descEl.textContent += ' ※オンライン参加者のフェイズ中です。ホストは閲覧のみで操作できません。';
 }
 }
 
@@ -2257,9 +2803,9 @@ function renderSelectedCastle() {
             </div>
         </div>
         <div class="mt-2 flex justify-between text-[11px] text-slate-400">
-            <span>城主: <strong class="text-slate-200">${lord ? lord.name : '不在'}</strong></span>
+            <span>城主: <strong class="text-slate-200">${lord ? lord.name : '不在'}</strong>${lord ? ` / 指導力: <strong class="text-violet-300">${getCommand(lord)}</strong>` : ''}</span>
             <span>月給与総額: <strong class="${castle.treasury < totalSalary ? 'text-rose-400' : 'text-slate-200'}">${totalSalary} G</strong></span>
-            <span>籠城バフ: <strong class="text-sky-300">+${Math.round((getSiegeBuff(castle) - 1) * 100)}%</strong></span> <span>実効守備力: <strong class="text-rose-300">${getEffectiveDefense(castle)}</strong></span> <span>月維持費: <strong class="text-slate-200">${Math.floor(getCastleTroops(castle.id) * 0.02)} G</strong></span>
+            <span>籠城バフ: <strong class="text-sky-300">+${Math.round((getSiegeBuff(castle) - 1) * 100)}%</strong></span> <span>実効守備力: <strong class="text-rose-300">${getEffectiveDefense(castle)}</strong></span> <span>月維持費: <strong class="text-slate-200">${Math.floor(getCastleTroops(castle.id) * 0.02)} G</strong></span> <span>勢力領地: <strong class="text-slate-200">${countTerritory(castle.factionId)}マス</strong></span>${isEncircled(castle) ? ' <span class="text-rose-400 font-bold">包囲中！（籠城バフ低下・荒廃増）</span>' : ''}
         </div>
     `;
 
@@ -2520,7 +3066,7 @@ document.getElementById('ind-preview-box').innerHTML = `
 <div>出撃兵力: <strong class="text-amber-400">${sendTroops} 兵</strong>（出撃後に残る私兵: ${(player.troops || 0) - sendTroops} 兵）</div>
 <div>目標の実効守備力: <strong class="text-rose-300">${getEffectiveDefense(target)} 兵相当</strong>（駐留 ${getCastleTroops(target.id)} 兵、籠城バフ +${Math.round((getSiegeBuff(target) - 1) * 100)}%）</div>
 <div>行軍日数: <strong class="text-sky-400">${travel.days} 日</strong></div>
-<div class="text-slate-400">内訳: 距離 ${travel.dist}マス / 統率補正 x${travel.factor} / 地形 ${travel.terrainName} +${travel.terrainBonus}日</div>
+<div class="text-slate-400">内訳: 距離 ${travel.dist}マス / マス目移動（経路の地形コスト ÷ 1日の移動力。敵地は+1）</div>
 `;
 };
 
@@ -2561,7 +3107,7 @@ document.getElementById('atk-preview-box').innerHTML = `
 <div>出撃兵力: <strong class="text-amber-400">${adj.total} 兵</strong>（出陣後、城に残る守備: ${remain} 兵）</div>
 <div>目標の実効守備力: <strong class="text-rose-300">${getEffectiveDefense(target)} 兵相当</strong>（駐留 ${getCastleTroops(target.id)} 兵、籠城バフ +${Math.round((getSiegeBuff(target) - 1) * 100)}%）</div>
 <div>行軍日数: <strong class="text-sky-400">${travel.days} 日</strong></div>
-<div class="text-slate-400">内訳: 距離 ${travel.dist}マス / 統率補正 x${travel.factor} / 地形 ${travel.terrainName} +${travel.terrainBonus}日</div>
+<div class="text-slate-400">内訳: 距離 ${travel.dist}マス / マス目移動（経路の地形コスト ÷ 1日の移動力。敵地は+1）</div>
 ${warn}
 `;
 };
@@ -2727,6 +3273,7 @@ function confirmSetup() {
     addLog(`ゲーム開始！ ${configs.map(c => c.name).join('、')} が名乗りを上げました。`, 'phase');
     netProcessPending();
     netSync();
+    if (gameState.netMode === 'host') netEnableOnlineAuto(); // v7: ホスト中は世界を自動進行
 }
 
 document.getElementById('setup-start').onclick = confirmSetup;
@@ -2841,6 +3388,19 @@ function drawMap() {
         }
     }
 
+    // v7: 領地を勢力色で薄く塗る
+    if (gameState.territory && gameState.territory.length) {
+        for (let r = 0; r < MAP_ROWS; r++) {
+            for (let q = 0; q < MAP_COLS; q++) {
+                const owner = gameState.territory[r][q];
+                if (owner && FACTIONS[owner]) {
+                    const p = hexToPixel(q, r);
+                    drawHex(p.x, p.y, R - 1, FACTIONS[owner].bg, FACTIONS[owner].bg, 1);
+                }
+            }
+        }
+    }
+
     gameState.castles.forEach(castle => {
         const { x, y } = hexToPixel(castle.q, castle.r);
         const faction = FACTIONS[castle.factionId];
@@ -2868,28 +3428,25 @@ function drawMap() {
     });
 
     gameState.armies.forEach(army => {
-        const origin = gameState.castles.find(c => c.id === army.originCastleId);
         const target = gameState.castles.find(c => c.id === army.targetCastleId);
-        if (!origin || !target) return;
+        if (!target || typeof army.posQ !== 'number') return;
 
-        const p1 = hexToPixel(origin.q, origin.r);
-        const p2 = hexToPixel(target.q, target.r);
-        const progress = Math.min(1, Math.max(0, (army.totalDays - army.daysLeft) / army.totalDays));
+        const cur = hexToPixel(army.posQ, army.posR);
+        const tp = hexToPixel(target.q, target.r);
 
-        const curX = p1.x + (p2.x - p1.x) * progress;
-        const curY = p1.y + (p2.y - p1.y) * progress;
-
+        // v7: 残りの経路を点線で描く
         ctx.beginPath();
         ctx.setLineDash([4, 4]);
-        ctx.moveTo(curX, curY);
-        ctx.lineTo(p2.x, p2.y);
+        ctx.moveTo(cur.x, cur.y);
+        (army.path || []).forEach(t => { const p = hexToPixel(t.q, t.r); ctx.lineTo(p.x, p.y); });
+        ctx.lineTo(tp.x, tp.y);
         ctx.strokeStyle = army.type === 'ATTACK' ? '#f43f5e' : '#38bdf8';
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.beginPath();
-        ctx.arc(curX, curY, 11, 0, Math.PI * 2);
+        ctx.arc(cur.x, cur.y, 11, 0, Math.PI * 2);
         ctx.fillStyle = army.type === 'ATTACK' ? '#e11d48' : '#0284c7';
         ctx.fill();
         ctx.strokeStyle = '#ffffff';
@@ -2900,17 +3457,21 @@ function drawMap() {
         ctx.font = 'bold 10px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(army.type === 'ATTACK' ? '⚔' : '🐎', curX, curY);
+        ctx.fillText(army.type === 'ATTACK' ? '⚔' : '🐎', cur.x, cur.y);
 
+        // v7: 指揮官名・兵力・状態（残日数／待機／帰還）を表示する
         const labelCommander = gameState.officers.find(o => o.id === army.commanderId);
         const labelTroops = army.type === 'ATTACK' ? army.troops : (labelCommander ? labelCommander.troops : 0);
+        const stateText = army.order === 'WAIT' ? '待機中' : (army.order === 'RETURN' ? `帰還中 残${army.daysLeft}日` : `残${army.daysLeft}日`);
         ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-        ctx.fillRect(curX - 27, curY - 39, 54, 26);
+        ctx.fillRect(cur.x - 34, cur.y - 52, 68, 38);
         ctx.fillStyle = '#fbbf24';
         ctx.font = 'bold 9px Inter, sans-serif';
-        ctx.fillText(`残${army.daysLeft}日`, curX, curY - 30);
+        ctx.fillText(labelCommander ? labelCommander.name : '不明', cur.x, cur.y - 43);
         ctx.fillStyle = '#f8fafc';
-        ctx.fillText(`${labelTroops}兵`, curX, curY - 18);
+        ctx.fillText(`${labelTroops}兵`, cur.x, cur.y - 31);
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillText(stateText, cur.x, cur.y - 19);
     });
 }
 
