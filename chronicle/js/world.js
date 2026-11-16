@@ -133,6 +133,17 @@ function pathTotalCost(path, factionId) {
 return (path || []).reduce((s, t) => s + tileEnterCost(t.q, t.r, factionId), 0);
 }
 
+// v9: 季節（1年=360日、3か月ごとに春夏秋冬）
+const SEASONS = [
+    { id: 'spring', name: '春' }, { id: 'summer', name: '夏' },
+    { id: 'autumn', name: '秋' }, { id: 'winter', name: '冬' }
+];
+function getSeason(day) {
+    const d = Math.max(1, Math.floor(day) || 1); // v9 review fix: 0以下や非数でも落ちないようにする
+    const month = Math.floor(((d - 1) % 360) / 30) + 1;
+    return SEASONS[Math.floor((month - 1) / 3)];
+}
+
 // v7: 1日の移動力（統率で2〜4、神速で1.5倍）
 function calcMovePoints(commander) {
 let base = 2;
@@ -141,6 +152,7 @@ if (commander.leadership >= 85) base = 4;
 else if (commander.leadership >= 65) base = 3;
 if (commander.trait === 'swift') base = Math.round(base * 1.5); // v7 review fix: was floor, which made swift useless in the leadership 65-84 band
 }
+if (getSeason(gameState.day).id === 'winter') base -= 1; // v9: 冬は移動力-1
 return Math.max(1, base);
 }
 
@@ -149,16 +161,18 @@ function armyMoveBonus(army) {
 return (army && army.forcedUntil && gameState.day <= army.forcedUntil) ? 2 : 0;
 }
 
-function estimateDaysForPath(path, commander, factionId, bonusPoints) {
+function estimateDaysForPath(path, commander, factionId, forcedUntilDay) {
 // v7 review fix: replay the real movement rules (daily points, no carry-over, min 1 tile) so estimates match actual travel
+// v9 review fix: 強行軍の+2は forcedUntilDay までの日だけ適用する（全行程に効く前提にしない）
 if (!path || path.length === 0) return 0;
-const pointsPerDay = calcMovePoints(commander) + (bonusPoints || 0);
+const basePoints = calcMovePoints(commander);
+const pointsFor = (dayOffset) => basePoints + ((forcedUntilDay && gameState.day + dayOffset <= forcedUntilDay) ? 2 : 0);
 let days = 1;
-let points = pointsPerDay;
+let points = pointsFor(0);
 let movedToday = false;
 for (const t of path) {
 const cost = tileEnterCost(t.q, t.r, factionId);
-if (cost > points && movedToday) { days++; points = pointsPerDay; movedToday = false; }
+if (cost > points && movedToday) { days++; points = pointsFor(days - 1); movedToday = false; }
 points = (cost > points) ? 0 : points - cost;
 movedToday = true;
 }
@@ -177,7 +191,7 @@ army.posQ = origin ? origin.q : 0;
 army.posR = origin ? origin.r : 0;
 if (!army.order) army.order = 'ADVANCE';
 army.path = (origin && target) ? findPath(origin.q, origin.r, target.q, target.r, army.factionId) : [];
-const est = estimateDaysForPath(army.path, commander, army.factionId, armyMoveBonus(army));
+const est = estimateDaysForPath(army.path, commander, army.factionId, army.forcedUntil || 0);
 army.totalDays = Math.max(1, est);
 army.daysLeft = army.totalDays;
 }
@@ -291,7 +305,7 @@ function processArmiesMovement() {
         if (destroyed) continue;
         if (!arrived && !foughtToday && targetCastle && army.posQ === targetCastle.q && army.posR === targetCastle.r) arrived = true;
 
-        army.daysLeft = army.path.length === 0 ? 0 : estimateDaysForPath(army.path, commander, army.factionId, armyMoveBonus(army));
+        army.daysLeft = army.path.length === 0 ? 0 : estimateDaysForPath(army.path, commander, army.factionId, army.forcedUntil || 0);
 
         if (arrived) {
             arriveArmy(army);

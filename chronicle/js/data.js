@@ -31,6 +31,24 @@ const TERRITORY_INCOME_PER_TILE = 2;
 // v8: 忠誠がこの値を下回ると反乱リスク圏（毎日確率判定、前兆通知あり）
 const REBELLION_LOYALTY_THRESHOLD = 50;
 
+// v9: 指導力の上限（統率×25。溜め込みすぎで後半のコスト感が消えるのを防ぐ）
+const COMMAND_CAP_PER_LEADERSHIP = 25;
+
+// v9: 部隊方針（出陣時に選ぶ。与える損害と受ける損害の倍率）
+const STANCES = {
+    balanced: { id: 'balanced', name: 'バランス', dealt: 1, taken: 1, desc: '補正なし' },
+    assault: { id: 'assault', name: '突撃', dealt: 1.15, taken: 1.15, desc: '与える損害+15%、受ける損害も+15%' },
+    guard: { id: 'guard', name: '堅守', dealt: 0.9, taken: 0.85, desc: '与える損害-10%、受ける損害-15%' }
+};
+
+// v9: 城の個性
+const SPECIALTIES = {
+    trade: { id: 'trade', name: '交易', desc: 'この城が君主の城なら領地収入+50%' },
+    fortress: { id: 'fortress', name: '要塞', desc: '実効守備+10%' },
+    harvest: { id: 'harvest', name: '豊穣', desc: '勢力の農地収入が+1G/マス' },
+    martial: { id: 'martial', name: '武門', desc: '駐留武将の武勇経験+50%' }
+};
+
 // v8: 兵科（歩兵・騎兵・弓兵）。地形と攻城で倍率が変わる
 const TROOP_TYPES = {
     infantry: { id: 'infantry', name: '歩兵', desc: '攻城戦の攻撃・守備で +10%' },
@@ -38,7 +56,7 @@ const TROOP_TYPES = {
     archer: { id: 'archer', name: '弓兵', desc: '森の野戦で +15%' }
 };
 const TROOP_TYPE_CHANGE_COST = 150;
-const SAVE_KEY = 'chronicle_of_betrayal_v8'; // v2: 反乱などで新勢力を作るときの発番カウンタ
+const SAVE_KEY = 'chronicle_of_betrayal_v9'; // v2: 反乱などで新勢力を作るときの発番カウンタ
 const REBEL_COLORS = [
 { color: '#a855f7', bg: 'rgba(168, 85, 247, 0.25)' },
 { color: '#f97316', bg: 'rgba(249, 115, 22, 0.25)' },
@@ -66,12 +84,12 @@ const FACTIONS_MASTER = JSON.parse(JSON.stringify(FACTIONS));
 // 地形タイプ
 // --- v8: 大マップ（15城・7勢力）の追加データ。座標は 18x13 用。名称・数値のたたき台はGemini作成、配置と勢力配分は調整済み ---
 const LARGE_CASTLES_EXTRA = [
-    { id: 10, name: 'セレスティア聖都', q: 15, r: 1, factionId: 6, troops: 3400, economy: 165, treasury: 620 },
-    { id: 11, name: 'フロストヘルム要塞', q: 17, r: 4, factionId: 6, troops: 3000, economy: 125, treasury: 410 },
-    { id: 12, name: 'ミラージュ城', q: 13, r: 8, factionId: 4, troops: 3200, economy: 140, treasury: 490 },
-    { id: 13, name: 'ドラグーン砦', q: 16, r: 11, factionId: 7, troops: 3500, economy: 115, treasury: 380 },
-    { id: 14, name: 'ルミナリア交易都市', q: 8, r: 11, factionId: 7, troops: 3300, economy: 170, treasury: 640 },
-    { id: 15, name: 'テンペスト関門', q: 4, r: 10, factionId: 5, troops: 3600, economy: 130, treasury: 450 }
+    { id: 10, name: 'セレスティア聖都', q: 15, r: 1, factionId: 6, troops: 3400, economy: 165, treasury: 620, specialty: 'harvest' },
+    { id: 11, name: 'フロストヘルム要塞', q: 17, r: 4, factionId: 6, troops: 3000, economy: 125, treasury: 410, specialty: 'fortress' },
+    { id: 12, name: 'ミラージュ城', q: 13, r: 8, factionId: 4, troops: 3200, economy: 140, treasury: 490, specialty: 'trade' },
+    { id: 13, name: 'ドラグーン砦', q: 16, r: 11, factionId: 7, troops: 3500, economy: 115, treasury: 380, specialty: 'martial' },
+    { id: 14, name: 'ルミナリア交易都市', q: 8, r: 11, factionId: 7, troops: 3300, economy: 170, treasury: 640, specialty: 'trade' },
+    { id: 15, name: 'テンペスト関門', q: 4, r: 10, factionId: 5, troops: 3600, economy: 130, treasury: 450, specialty: 'fortress' }
 ];
 const LARGE_NPC_CONFIGS_EXTRA = [
     { id: 'npc17', name: 'ユリウス',       valor: 68, leadership: 86, intellect: 88, castleId: 10, troops: 2700, merit: 310, loyalty: 100, gold: 520 },
@@ -132,15 +150,15 @@ const HUMAN_COLORS = ['#38bdf8', '#f472b6', '#a3e635', '#fbbf24'];
 const HUMAN_LABELS = ['P1', 'P2', 'P3', 'P4'];
 // --- 城・武将データ（標準は initGame から移植、大マップは標準＋追加分） ---
 const STD_CASTLES = [
-        { id: 1, name: 'ヴァルハラ城', q: 2, r: 2, factionId: 1, troops: 3500, economy: 140, treasury: 500 },
-        { id: 2, name: 'アーク要塞',   q: 5, r: 1, factionId: 1, troops: 2800, economy: 110, treasury: 350 },
-        { id: 3, name: 'ブルーム城',   q: 2, r: 7, factionId: 2, troops: 3600, economy: 150, treasury: 520 },
-        { id: 4, name: 'リバーゲート', q: 6, r: 5, factionId: 2, troops: 2600, economy: 120, treasury: 380 },
-        { id: 5, name: 'エメラルド砦', q: 10, r: 2, factionId: 3, troops: 3400, economy: 135, treasury: 480 },
-        { id: 6, name: 'ソラリス王都', q: 11, r: 7, factionId: 4, troops: 4000, economy: 170, treasury: 650 },
-        { id: 7, name: 'クレセント城', q: 8, r: 8, factionId: 3, troops: 3200, economy: 125, treasury: 420 },
-        { id: 8, name: 'アイアンクラッド砦', q: 12, r: 4, factionId: 4, troops: 3500, economy: 145, treasury: 460 },
-        { id: 9, name: 'シデン要塞', q: 0, r: 5, factionId: 5, troops: 3900, economy: 130, treasury: 430 }
+        { id: 1, name: 'ヴァルハラ城', q: 2, r: 2, factionId: 1, troops: 3500, economy: 140, treasury: 500, specialty: 'martial' },
+        { id: 2, name: 'アーク要塞',   q: 5, r: 1, factionId: 1, troops: 2800, economy: 110, treasury: 350, specialty: 'fortress' },
+        { id: 3, name: 'ブルーム城',   q: 2, r: 7, factionId: 2, troops: 3600, economy: 150, treasury: 520, specialty: 'harvest' },
+        { id: 4, name: 'リバーゲート', q: 6, r: 5, factionId: 2, troops: 2600, economy: 120, treasury: 380, specialty: 'trade' },
+        { id: 5, name: 'エメラルド砦', q: 10, r: 2, factionId: 3, troops: 3400, economy: 135, treasury: 480, specialty: 'fortress' },
+        { id: 6, name: 'ソラリス王都', q: 11, r: 7, factionId: 4, troops: 4000, economy: 170, treasury: 650, specialty: 'trade' },
+        { id: 7, name: 'クレセント城', q: 8, r: 8, factionId: 3, troops: 3200, economy: 125, treasury: 420, specialty: 'harvest' },
+        { id: 8, name: 'アイアンクラッド砦', q: 12, r: 4, factionId: 4, troops: 3500, economy: 145, treasury: 460, specialty: 'fortress' },
+        { id: 9, name: 'シデン要塞', q: 0, r: 5, factionId: 5, troops: 3900, economy: 130, treasury: 430, specialty: 'martial' }
     ];
 const LARGE_CASTLES = STD_CASTLES.concat(LARGE_CASTLES_EXTRA);
 const STD_NPC_CONFIGS = [

@@ -62,6 +62,11 @@ function bumpOfficerStat(officer, key) {
 // v8: 武将の成長。経験が100たまるごとに能力+1（各能力+10まで）
 function gainOfficerExp(officer, kind, amount) {
     if (!officer || amount <= 0) return;
+    // v9: 武門の城に駐留する武将は武勇経験+50%
+    if (kind === 'valor' && officer.castleId !== null && officer.castleId !== undefined) {
+        const home = gameState.castles.find(c => c.id === officer.castleId);
+        if (home && home.specialty === 'martial') amount = Math.round(amount * 1.5);
+    }
     if (!officer.xp) officer.xp = { valor: 0, leadership: 0, intellect: 0 };
     if (!officer.growth) officer.growth = { valor: 0, leadership: 0, intellect: 0 };
     officer.xp[kind] = (officer.xp[kind] || 0) + amount;

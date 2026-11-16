@@ -2,7 +2,7 @@
 
 
 // --- v5 追加: オンライン対戦（PeerJS・ホスト権威方式） ---
-const NET_PREFIX = 'cob-v8-';
+const NET_PREFIX = 'cob-v9-';
 const NET_ACTION_WHITELIST = ['actionEnlist', 'actionDomesticAffairs', 'actionTrain', 'actionRelocate', 'actionBribeSabotage', 'actionResign', 'actionRecruit', 'actionDistributeFunds', 'actionEmbezzle', 'actionLaunchAttack', 'actionSetFactionPolicy', 'actionStrategyDomestic', 'actionStrategyTrain', 'actionEmergencyLevy', 'actionChangeTroopType'];
 const NET_ACTION_PHASE = {
     actionEnlist: 'PERSONAL', actionDomesticAffairs: 'PERSONAL', actionTrain: 'PERSONAL',
@@ -223,7 +223,7 @@ function netHandleGuestData(officerId, msg) {
     } else if (msg.type === 'action') {
         if (!NET_ACTION_WHITELIST.includes(msg.name)) return;
         if (gameState.activeOfficerId !== officerId) return;
-        const args = Array.isArray(msg.args) ? msg.args.slice(0, 5) : [];
+        const args = Array.isArray(msg.args) ? msg.args.slice(0, 6) : []; // v9 review fix: 6番目の引数（部隊方針）まで通す
         if (args.some(a => a !== null && typeof a === 'object')) return;
         const need = NET_ACTION_PHASE[msg.name];
         if (need && gameState.activePhase !== need) return;
@@ -234,6 +234,7 @@ function netHandleGuestData(officerId, msg) {
             if (mode === 'independent' && gameState.activePhase !== 'PERSONAL') return;
         }
         if (msg.name === 'actionLaunchAttack' && args.length > 4 && args[4] !== null && typeof args[4] !== 'number') return;
+        if (msg.name === 'actionLaunchAttack' && args.length > 5 && args[5] !== null && typeof args[5] !== 'string') return; // v9: 方針は文字列か null のみ
         const fn = window[msg.name];
         if (typeof fn === 'function') {
             try { fn(...args); } catch (e) { addLog('オンライン参加者の操作でエラーが発生しました。', 'warn'); }

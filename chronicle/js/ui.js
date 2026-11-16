@@ -36,7 +36,7 @@ function openArmiesModal() {
         const faction = FACTIONS[army.factionId];
         const troops = army.type === 'ATTACK' ? army.troops : (commander ? commander.troops : 0);
         const kind = army.type === 'ATTACK' ? '⚔ 攻撃' : '🐎 移動';
-        const orderText = army.type !== 'ATTACK' ? '' : (army.order === 'WAIT' ? ' / 待機中' : (army.order === 'RETURN' ? ' / 帰還中' : '')) + ((army.forcedUntil && gameState.day <= army.forcedUntil) ? ' / 強行軍中' : '');
+        const orderText = army.type !== 'ATTACK' ? '' : (army.order === 'WAIT' ? ' / 待機中' : (army.order === 'RETURN' ? ' / 帰還中' : '')) + ((army.forcedUntil && gameState.day <= army.forcedUntil) ? ' / 強行軍中' : '') + ` / 方針:${(STANCES[army.stance] || STANCES.balanced).name}`; // v9: 方針表示
         const stats = commander ? `武${commander.valor} 統${commander.leadership} ${TROOP_TYPES[getTroopType(commander)].name}` : '';
         const remainText = army.order === 'WAIT' ? '待機中' : `残${army.daysLeft}日`;
         let orderBtns = '';
@@ -197,7 +197,7 @@ function updateUI() {
     const month = Math.floor(((gameState.day - 1) % 360) / 30) + 1;
     const dayOfMonth = ((gameState.day - 1) % 30) + 1;
 
-    document.getElementById('calendar-display').textContent = `${year}年 ${month}月 ${dayOfMonth}日 (${gameState.day}日目)`;
+    document.getElementById('calendar-display').textContent = `${year}年 ${month}月 ${dayOfMonth}日 (${gameState.day}日目・${getSeason(gameState.day).name})`; // v9: 季節表示
 
     let rankText = '浪人 (無所属)';
     let rankColor = 'text-slate-400';
@@ -300,7 +300,7 @@ const ruler = isFactionRuler(player);
 titleEl.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>戦略フェイズ（${ruler? '君主': '城主'}特権）`;
 badgeEl.textContent = '戦略指揮';
 badgeEl.className = 'text-[11px] px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-600';
-descEl.textContent = `共有資金: ${castle.treasury}G / 駐留兵力（私兵合計）: ${getCastleTroops(castle.id)}兵 / 指導力: ${getCommand(player)}（出陣${COMMAND_COSTS.attack}・徴兵${COMMAND_COSTS.recruit}・その他${COMMAND_COSTS.domestic}。毎日 統率ぶん貯まります）。横領や給与未払いに注意しながら国を運営してください。`;
+descEl.textContent = `共有資金: ${castle.treasury}G / 駐留兵力（私兵合計）: ${getCastleTroops(castle.id)}兵 / 指導力: ${getCommand(player)}（上限 ${getCommandCap(player)}。出陣${COMMAND_COSTS.attack}・徴兵${COMMAND_COSTS.recruit}・その他${COMMAND_COSTS.domestic}。毎日 統率ぶん貯まります）/ 個性: ${(SPECIALTIES[castle.specialty] || {}).name || 'なし'}。横領や給与未払いに注意しながら国を運営してください。`; // v9: 上限と個性を表示
 
 addActionButton(btnsEl, `⚔️ 出陣命令 (指導力${COMMAND_COSTS.attack})`, 'bg-rose-600 text-white font-bold', () => openAttackModal(), getCommand(player) < COMMAND_COSTS.attack);
 addActionButton(btnsEl, `🛡️ 徴兵 (私兵+400 / 150G / 指導力${COMMAND_COSTS.recruit})`, 'bg-sky-600 text-white', () => actionRecruit(), castle.treasury < 150 || getCommand(player) < COMMAND_COSTS.recruit);
@@ -386,7 +386,7 @@ function renderSelectedCastle() {
             </div>
         </div>
         <div class="mt-2 flex justify-between text-[11px] text-slate-400">
-            <span>城主: <strong class="text-slate-200">${lord ? lord.name : '不在'}</strong>${lord ? ` / 指導力: <strong class="text-violet-300">${getCommand(lord)}</strong>` : ''}</span>
+            <span>城主: <strong class="text-slate-200">${lord ? lord.name : '不在'}</strong>${lord ? ` / 指導力: <strong class="text-violet-300">${getCommand(lord)}（上限 ${getCommandCap(lord)}）</strong>` : ''} / 個性: <strong class="text-teal-300">${(SPECIALTIES[castle.specialty] || {}).name || 'なし'}</strong></span>
             <span>月給与総額: <strong class="${castle.treasury < totalSalary ? 'text-rose-400' : 'text-slate-200'}">${totalSalary} G</strong></span>
             <span>籠城バフ: <strong class="text-sky-300">+${Math.round((getSiegeBuff(castle) - 1) * 100)}%</strong></span> <span>実効守備力: <strong class="text-rose-300">${getEffectiveDefense(castle)}</strong></span> <span>月維持費: <strong class="text-slate-200">${Math.floor(getCastleTroops(castle.id) * 0.02)} G</strong></span> <span>勢力領地: <strong class="text-slate-200">${countTerritory(castle.factionId)}マス</strong></span>${isEncircled(castle) ? ' <span class="text-rose-400 font-bold">包囲中！（籠城バフ低下・荒廃増）</span>' : ''}
         </div>
@@ -620,6 +620,14 @@ ${enemyCastles.map(c => `<option value="${c.id}">${c.name} [${FACTIONS[c.faction
 <input type="range" id="atk-troops-slider" class="w-full" min="300" max="300" step="10" value="300" oninput="onAttackSliderInput()">
 <div class="flex justify-between text-[10px] text-slate-500"><span>最小 300</span><span id="atk-slider-max-label"></span></div>
 </div>
+<div>
+<label class="block text-xs text-slate-400 mb-1">部隊方針</label>
+<select id="atk-stance-select" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs text-white">
+<option value="balanced">バランス（補正なし）</option>
+<option value="assault">突撃（与える損害+15%／受ける損害+15%）</option>
+<option value="guard">堅守（与える損害-10%／受ける損害-15%）</option>
+</select>
+</div>
 <div id="atk-preview-box" class="bg-slate-900/90 p-2.5 rounded border border-slate-700 text-xs text-slate-300"></div>
 </div>`;
 
@@ -633,7 +641,8 @@ const oId = parseInt(document.getElementById('atk-origin-select').value);
 const tId = parseInt(document.getElementById('atk-target-select').value);
 const cId = document.getElementById('atk-cmd-select').value;
 const sliderEl = document.getElementById('atk-troops-slider');
-actionLaunchAttack(oId, tId, cId, 'strategy', sliderEl ? parseInt(sliderEl.value) : null);
+const stanceEl = document.getElementById('atk-stance-select');
+actionLaunchAttack(oId, tId, cId, 'strategy', sliderEl ? parseInt(sliderEl.value) : null, stanceEl ? stanceEl.value : null);
 }
 }
 ]);
@@ -662,6 +671,14 @@ let html = `<div class="space-y-3">
 ${enemyCastles.map(c => `<option value="${c.id}">${c.name} [${FACTIONS[c.factionId].name}] (守備: ${getCastleTroops(c.id)})</option>`).join('')}
 </select>
 </div>
+<div>
+<label class="block text-xs text-slate-400 mb-1">部隊方針</label>
+<select id="ind-stance-select" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs text-white">
+<option value="balanced">バランス（補正なし）</option>
+<option value="assault">突撃（与える損害+15%／受ける損害+15%）</option>
+<option value="guard">堅守（与える損害-10%／受ける損害-15%）</option>
+</select>
+</div>
 <div id="ind-preview-box" class="bg-slate-900/90 p-2.5 rounded border border-slate-700 text-xs text-slate-300"></div>
 </div>`;
 
@@ -673,7 +690,8 @@ class: 'bg-rose-600 text-white font-bold',
 onClick: () => {
 const tId = parseInt(document.getElementById('ind-target-select').value);
 const indSlider = document.getElementById('ind-troops-slider');
-actionLaunchAttack(myCastle.id, tId, player.id, 'independent', indSlider ? parseInt(indSlider.value) : null);
+const indStanceEl = document.getElementById('ind-stance-select');
+actionLaunchAttack(myCastle.id, tId, player.id, 'independent', indSlider ? parseInt(indSlider.value) : null, indStanceEl ? indStanceEl.value : null);
 }
 }
 ]);

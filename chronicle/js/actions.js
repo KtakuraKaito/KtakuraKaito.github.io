@@ -3,6 +3,8 @@
 
 // v7: 指導力（城主でいる間、毎日 統率ぶん貯まる。戦略フェイズの全行動で消費する）
 function getCommand(o) { return Math.floor((o && o.command) || 0); }
+// v9: 指導力の上限は統率×25
+function getCommandCap(o) { return Math.floor(((o && o.leadership) || 0) * COMMAND_CAP_PER_LEADERSHIP); }
 function spendCommand(o, cost) {
     if (!o || getCommand(o) < cost) return false;
     o.command = getCommand(o) - cost;
@@ -99,7 +101,7 @@ function setArmyOrder(army, kind, targetCastleId) {
         army.order = 'RETURN';
         army.targetCastleId = origin.id;
         army.path = findPath(army.posQ, army.posR, origin.q, origin.r, army.factionId);
-        army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId));
+        army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId, army.forcedUntil || 0));
         addLog(`${cmdName} 隊に ${origin.name} への帰還命令が出ました。`, 'info');
         return true;
     }
@@ -110,7 +112,7 @@ function setArmyOrder(army, kind, targetCastleId) {
         army.order = 'ADVANCE';
         army.targetCastleId = target.id;
         army.path = findPath(army.posQ, army.posR, target.q, target.r, army.factionId);
-        army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId));
+        army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId, army.forcedUntil || 0));
         addLog(`${cmdName} 隊の目標が ${target.name} に変更されました。`, 'info');
         return true;
     }
@@ -198,9 +200,9 @@ function advanceOneDay() {
     if (!resumingDay) {
     gameState.day++;
 
-    // v7: 指導力の蓄積（城主でいる間、毎日その城主の統率ぶん貯まる。上限なし）
+    // v7/v9: 指導力の蓄積（城主でいる間、毎日その城主の統率ぶん貯まる。上限は統率×25）
     gameState.officers.forEach(o => {
-        if (isCastleLord(o)) o.command = getCommand(o) + (o.leadership || 0);
+        if (isCastleLord(o)) o.command = Math.min(getCommandCap(o), getCommand(o) + (o.leadership || 0));
     });
 
     if (gameState.day % 10 === 0) {
@@ -280,6 +282,32 @@ saveGame();
 function processMonthlyEconomy() {
 addLog(`=== ${Math.floor(gameState.day / 30)}ヶ月目の収支・給与決済 ===`, 'warn');
 
+// v9 review fix: 領地収入は給与支払いより先に君主の城へ入れる（収入直前に未払いになる理不尽をなくす）
+// v7: 領地収入（勢力の領地マス数 × 2G を、その勢力の君主の城の金庫へ）
+Object.keys(FACTIONS).forEach(k => {
+const fid = Number(k);
+if (fid === 0) return;
+const tiles = countTerritory(fid);
+if (tiles === 0) return;
+let ruler = null;
+let rulerCastle = null;
+gameState.castles.filter(c => c.factionId === fid).forEach(c => {
+const l = getCastleLord(c.id);
+if (l && (!ruler || l.merit > ruler.merit)) { ruler = l; rulerCastle = c; }
+});
+if (ruler && rulerCastle) {
+const farms = countFarmland(fid); // v8: 農地マスは追加で +1G/マス
+// v9: 豊穣の城を持つ勢力は農地収入+1、秋は収穫でさらに+1、君主の城が交易なら領地収入1.5倍
+const hasHarvest = gameState.castles.some(c => c.factionId === fid && c.specialty === 'harvest');
+const farmRate = 1 + (hasHarvest ? 1 : 0) + (getSeason(gameState.day).id === 'autumn' ? 1 : 0);
+let gain = tiles * TERRITORY_INCOME_PER_TILE + farms * farmRate;
+if (rulerCastle.specialty === 'trade') gain = Math.floor(gain * 1.5);
+rulerCastle.treasury += gain;
+if (isHuman(ruler)) addLog(`領地収入: ${tiles}マス × ${TERRITORY_INCOME_PER_TILE}G${farms ? ` + 農地${farms}マス × ${farmRate}G` : ''}${rulerCastle.specialty === 'trade' ? '（交易の城 +50%）' : ''} = +${gain}G が ${rulerCastle.name} の金庫に入りました。`, 'good');
+}
+});
+
+
 gameState.castles.forEach(castle => {
 const income = castle.economy * 2;
 castle.treasury += income;
@@ -322,26 +350,6 @@ addLog(`配下 ${member.name} への給料が払えず不満が爆発してい�
 });
 
 updateRebellionWarnings(castle);
-});
-
-// v7: 領地収入（勢力の領地マス数 × 2G を、その勢力の君主の城の金庫へ）
-Object.keys(FACTIONS).forEach(k => {
-const fid = Number(k);
-if (fid === 0) return;
-const tiles = countTerritory(fid);
-if (tiles === 0) return;
-let ruler = null;
-let rulerCastle = null;
-gameState.castles.filter(c => c.factionId === fid).forEach(c => {
-const l = getCastleLord(c.id);
-if (l && (!ruler || l.merit > ruler.merit)) { ruler = l; rulerCastle = c; }
-});
-if (ruler && rulerCastle) {
-const farms = countFarmland(fid); // v8: 農地マスは追加で +1G/マス
-const gain = tiles * TERRITORY_INCOME_PER_TILE + farms;
-rulerCastle.treasury += gain;
-if (isHuman(ruler)) addLog(`領地収入: ${tiles}マス × ${TERRITORY_INCOME_PER_TILE}G${farms ? ` + 農地${farms}マス × 1G` : ''} = +${gain}G が ${rulerCastle.name} の金庫に入りました。`, 'good');
-}
 });
 
 runWorldEvent();
@@ -387,6 +395,49 @@ lowLoyaltyMember.loyalty = Math.min(100, lowLoyaltyMember.loyalty + 20);
 lowLoyaltyMember.gold += 50;
 }
 
+// v9: NPC城主も領地開発と緊急徴兵を使う（どちらも月1回まで）
+const npcMonth = Math.floor((gameState.day - 1) / 30); // v9 review fix: 暦の月と揃える
+if (castle.npcDevelopMonth !== npcMonth && castle.treasury >= 800 && getCommand(lord) >= COMMAND_COSTS.develop) { // v9 review fix: 月1回は城単位で数える
+    const devTiles = [];
+    gameState.territory.forEach((row, r) => row.forEach((v, q) => {
+        if (v !== castle.factionId || getDevelopment(q, r) !== 0) return;
+        if (gameState.castles.some(c => c.q === q && c.r === r)) return;
+        if (calcDistance(castle.q, castle.r, q, r) > 6) return; // v9 review fix: 距離判定を他と揃える
+        let border = false;
+        for (let dr = -1; dr <= 1 && !border; dr++) for (let dq = -1; dq <= 1; dq++) {
+            const nq = q + dq, nr = r + dr;
+            if (nq < 0 || nr < 0 || nq >= MAP_COLS || nr >= MAP_ROWS) continue;
+            const nv = gameState.territory[nr][nq];
+            if (nv !== 0 && nv !== castle.factionId) { border = true; break; }
+        }
+        devTiles.push({ q, r, border });
+    }));
+    const devPick = devTiles.find(t => t.border) || devTiles[0];
+    if (devPick) {
+        const kind = devPick.border ? 2 : 1;
+        const goldCost = DEVELOP_COSTS[kind] || 0;
+        if (castle.treasury >= goldCost && spendCommand(lord, COMMAND_COSTS.develop)) {
+            castle.treasury -= goldCost;
+            setDevelopment(devPick.q, devPick.r, kind);
+            castle.npcDevelopMonth = npcMonth;
+            addLog(`${castle.name}の領地 (${devPick.q}, ${devPick.r}) に${kind === 1 ? '農地' : '関所'}が開発されました。`, 'info');
+        }
+    }
+}
+if (castle.npcLevyMonth !== npcMonth && castle.treasury >= 600) {
+    let strongestEnemy = 0;
+    gameState.castles.forEach(c => {
+        if (c.factionId !== castle.factionId && calcDistance(castle.q, castle.r, c.q, c.r) <= 8) strongestEnemy = Math.max(strongestEnemy, getCastleTroops(c.id));
+    });
+    if (strongestEnemy > 0 && getCastleTroops(castle.id) < strongestEnemy && spendCommand(lord, COMMAND_COSTS.emergencyLevy)) {
+        castle.treasury -= 450;
+        lord.troops = (lord.troops || 0) + 800;
+        castle.npcLevyMonth = npcMonth;
+        addLog(`${castle.name}で緊急徴兵が行われ、${lord.name}の私兵が増えました。`, 'info');
+        return;
+    }
+}
+
 // v2: 徴兵は城プールではなく城主自身の私兵を増やす
 if ((lord.troops || 0) < 2600 && castle.treasury >= 200 && spendCommand(lord, COMMAND_COSTS.recruit)) {
 castle.treasury -= 150;
@@ -409,7 +460,7 @@ if (!candidate || candidate.factionId === castle.factionId) return false;
 if (calcDistance(castle.q, castle.r, candidate.q, candidate.r) > 8) return false;
 for (const cmd of commanderCandidates) {
 const plan = planExpedition(castle, cmd);
-if (plan.total >= 300 && plan.total >= (getCastleTroops(candidate.id) + 100) * getSiegeBuff(candidate) * 0.8) {
+if (plan.total >= 300 && plan.total >= (getCastleTroops(candidate.id) + 100) * getSiegeBuff(candidate) * castleDefenseFactor(candidate) * 0.8) {
 targetCastle = candidate;
 chosenPlan = plan;
 chosenCommander = cmd;
@@ -458,8 +509,20 @@ totalDays: travel.days,
 daysLeft: travel.days
 });
 initArmyRoute(gameState.armies[gameState.armies.length - 1]);
+const npcArmy = gameState.armies[gameState.armies.length - 1];
+// v9: NPCも戦力差で部隊方針を選ぶ（守備見積もりは実効守備力をそのまま使う）
+const powerRatio = chosenPlan.total / Math.max(1, getEffectiveDefense(targetCastle));
+npcArmy.stance = powerRatio >= 1.2 ? 'assault' : (powerRatio <= 0.9 ? 'guard' : 'balanced');
+// v9: NPCも長距離なら強行軍を使う
+let npcForced = false;
+if (travel.days >= 5 && spendCommand(lord, COMMAND_COSTS.forcedMarch)) {
+    npcArmy.forcedUntil = gameState.day + 3;
+    if (npcArmy.path && npcArmy.path.length) npcArmy.daysLeft = Math.max(1, estimateDaysForPath(npcArmy.path, chosenCommander, npcArmy.factionId, npcArmy.forcedUntil || 0));
+    npcForced = true;
+}
 
-addLog(`${FACTIONS[castle.factionId].name}の ${chosenCommander.name} 隊（${chosenPlan.total}兵）が ${targetCastle.name} へ進軍開始（到着まで${travel.days}日）`, 'warn');
+addLog(`${FACTIONS[castle.factionId].name}の ${chosenCommander.name} 隊（${chosenPlan.total}兵）が ${targetCastle.name} へ進軍開始（到着まで${npcArmy.daysLeft}日）`, 'warn');
+if (npcForced) addLog(`${chosenCommander.name} 隊が強行軍を開始しました（3日間、移動力+2）。`, 'info'); // v9 review fix: 進軍開始ログの後に強行軍ログを出す
 syncCastleLords();
 }
 }
@@ -755,7 +818,7 @@ function actionForcedMarch(armyId) {
     if (!spendCommand(officer, COMMAND_COSTS.forcedMarch)) return;
     army.forcedUntil = gameState.day + 3;
     const commander = gameState.officers.find(o => o.id === army.commanderId);
-    if (army.path && army.path.length) army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId, 2)); // v8 review fix: 到着予測にも強行軍を反映
+    if (army.path && army.path.length) army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId, army.forcedUntil || 0)); // v8/v9: 到着予測にも強行軍を反映（期間内のみ）
     addLog(`${commander ? commander.name : '部隊'} 隊が強行軍を開始しました（3日間、移動力+2）。`, 'good');
     saveGame();
     netSync();
@@ -841,8 +904,10 @@ addLog(`${castle.name}の共有資金から ${amount}G を私財に引き出し�
 finishPlayerPhase();
 }
 
-function actionLaunchAttack(originCastleId, targetCastleId, commanderId, mode = 'strategy', dispatchTotal = null) {
-    if (netGuestGate('actionLaunchAttack', [originCastleId, targetCastleId, commanderId, mode, dispatchTotal])) return;
+function actionLaunchAttack(originCastleId, targetCastleId, commanderId, mode = 'strategy', dispatchTotal = null, stance = null) {
+    if (netGuestGate('actionLaunchAttack', [originCastleId, targetCastleId, commanderId, mode, dispatchTotal, stance])) return;
+    const stanceId = (stance && Object.prototype.hasOwnProperty.call(STANCES, stance)) ? stance : 'balanced'; // v9 review fix: 原型プロパティ（toString等）を不正値として弾く
+    if (mode !== 'independent') mode = 'strategy'; // v9 review fix: 不正な mode でフェイズ確認と指導力コストを回避できないようにする
 const origin = gameState.castles.find(c => c.id === originCastleId);
 const target = gameState.castles.find(c => c.id === targetCastleId);
 const commander = gameState.officers.find(o => o.id === commanderId);
@@ -897,6 +962,7 @@ commander.nextStrategyDay = null;
 gameState.armies.push({
 id: 'atk_' + Date.now() + '_' + Math.floor(Math.random() * 1e6),
 type: 'ATTACK',
+stance: stanceId, // v9: 部隊方針
 factionId: origin.factionId,
 originCastleId: origin.id,
 targetCastleId: target.id,

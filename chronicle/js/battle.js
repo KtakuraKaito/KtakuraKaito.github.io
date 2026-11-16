@@ -5,7 +5,23 @@
 function getSiegeBuff(castle) {
     let buff = 1 + ((castle.economy || 0) / ECONOMY_MAX) * 0.5;
     if (typeof isEncircled === 'function' && isEncircled(castle)) buff *= 0.85; // v7: 包囲されると補給が断たれ籠城バフ低下
-    return buff;
+    return Math.max(0.9, buff); // v9: 下限0.9（低経済＋包囲で落ちやすさが極端にならないように）
+}
+
+// v9: 兵科の三すくみ（野戦のみ。有利な側が+10%）
+function troopMatchupModifier(me, enemy) {
+    if (!me || !enemy) return 1;
+    const a = getTroopType(me), b = getTroopType(enemy);
+    if ((a === 'cavalry' && b === 'archer') || (a === 'archer' && b === 'infantry') || (a === 'infantry' && b === 'cavalry')) return 1.1;
+    return 1;
+}
+
+// v9: 部隊方針（未設定はバランス扱い）
+function stanceOf(army) { const s = army && army.stance; return (s && Object.prototype.hasOwnProperty.call(STANCES, s)) ? STANCES[s] : STANCES.balanced; } // v9 review fix: 原型プロパティのすり抜けを防ぐ
+
+// v9: 要塞の城は守備が1割増し
+function castleDefenseFactor(castle) {
+    return (castle && castle.specialty === 'fortress') ? 1.1 : 1;
 }
 
 // v6: 実効守備力（表示・NPC判定用。乱数なし）
@@ -31,7 +47,7 @@ function troopTypeModifier(officer, terrain, context) {
 function getEffectiveDefense(castle) {
     const lord = getCastleLord(castle.id);
     const defValor = lord ? lord.valor : 55;
-    let eff = (getCastleTroops(castle.id) + 100) * (1 + defValor / 100) * getSiegeBuff(castle);
+    let eff = (getCastleTroops(castle.id) + 100) * (1 + defValor / 100) * getSiegeBuff(castle) * castleDefenseFactor(castle); // v9: 要塞補正
     if (lord && lord.trait === 'ironwall') eff *= 1.15;
     if (lord) eff *= troopTypeModifier(lord, null, 'siege-defense'); // v8: 歩兵の城主は守備 +10%
     return Math.round(eff);
@@ -325,19 +341,21 @@ function resolveFieldBattle(armyA, armyB) {
     const posA = armyFieldPos(armyA);
     const battleCell = posA ? (gameState.mapGrid[posA.r] && gameState.mapGrid[posA.r][posA.q]) : null;
     const battleTerrain = battleCell ? battleCell.terrain : TERRAIN.PLAIN;
-    const powerOf = (army, cmd) => {
+    const powerOf = (army, cmd, enemyCmd) => {
         let p = army.troops * (1 + (cmd ? cmd.valor : 60) / 100) * (0.9 + Math.random() * 0.25);
         if (cmd && cmd.trait === 'brave') p *= 1.15;
         if (cmd) p *= troopTypeModifier(cmd, battleTerrain, 'field'); // v8: 兵科と地形の相性
+        if (cmd) p *= troopMatchupModifier(cmd, enemyCmd); // v9: 兵科の三すくみ
+        p *= stanceOf(army).dealt; // v9: 部隊方針（与える損害）
         return p;
     };
-    const pA = powerOf(armyA, cmdA), pB = powerOf(armyB, cmdB);
+    const pA = powerOf(armyA, cmdA, cmdB), pB = powerOf(armyB, cmdB, cmdA);
     const aWins = pA >= pB;
     const winner = aWins ? armyA : armyB, loser = aWins ? armyB : armyA;
     const wCmd = aWins ? cmdA : cmdB, lCmd = aWins ? cmdB : cmdA;
     const wPow = aWins ? pA : pB, lPow = aWins ? pB : pA;
 
-    const survivors = Math.floor(loser.troops * 0.35);
+    const survivors = Math.floor(loser.troops * 0.35 * (2 - stanceOf(loser).taken)); // v9: 方針で敗残兵の戻りが変わる
     distributeArmyRemainder(loser, survivors);
     if (lCmd) {
         lCmd.isMoving = false;
@@ -349,7 +367,7 @@ function resolveFieldBattle(armyA, armyB) {
     const li = gameState.armies.indexOf(loser);
     if (li >= 0) gameState.armies.splice(li, 1);
 
-    const rawRemain = Math.floor(winner.troops * (1 - lPow / (wPow * 1.4)));
+    const rawRemain = Math.floor(winner.troops * (1 - (lPow / (wPow * 1.4)) * stanceOf(winner).dealt * stanceOf(winner).taken)); // v9 review fix: 勝者の損害は dealt と taken の積で効かせる（相殺防止）
     winner.troops = isFinite(rawRemain) ? Math.max(150, rawRemain) : 150;
     winner._foughtDay = gameState.day; // v7 review fix: one field battle per army per day
     if (wCmd) { wCmd.merit += meritGainFor(wCmd, 60); gainOfficerExp(wCmd, 'valor', 40); gainOfficerExp(wCmd, 'leadership', 20); bumpOfficerStat(wCmd, 'battlesWon'); } // v8: 勝者は成長し戦績が残る
@@ -386,7 +404,9 @@ const defValor = defLord? defLord.valor: 55;
 let atkPower = army.troops * (1 + atkValor / 100) * (0.9 + Math.random() * 0.25);
 if (commander && commander.trait === 'brave') atkPower *= 1.15;
 if (commander) atkPower *= troopTypeModifier(commander, null, 'siege-attack'); // v8: 歩兵の攻城 +10%
-let defPower = (defTroops + 100) * (1 + defValor / 100) * (0.95 + Math.random() * 0.2) * getSiegeBuff(targetCastle);
+atkPower *= stanceOf(army).dealt; // v9: 部隊方針（与える損害）
+if (typeof getSeason === 'function' && getSeason(gameState.day).id === 'winter') atkPower *= 0.9; // v9: 冬の攻城は1割不利
+let defPower = (defTroops + 100) * (1 + defValor / 100) * (0.95 + Math.random() * 0.2) * getSiegeBuff(targetCastle) * castleDefenseFactor(targetCastle); // v9: 要塞補正
 if (defLord && defLord.trait === 'ironwall') defPower *= 1.15;
 if (defLord) defPower *= troopTypeModifier(defLord, null, 'siege-defense'); // v8: 歩兵の守備 +10%
 
@@ -394,7 +414,7 @@ const factionName = FACTIONS[army.factionId]?.name || '攻撃軍';
 const playerInvolved = (commander && isHuman(commander)) || defenders.some(d => isHuman(d));
 
 if (atkPower > defPower) {
-const remainingTroops = Math.max(150, Math.floor(army.troops * (1 - defPower / (atkPower * 1.4))));
+const remainingTroops = Math.max(150, Math.floor(army.troops * (1 - (defPower / (atkPower * 1.4)) * stanceOf(army).dealt * stanceOf(army).taken))); // v9 review fix: 攻城の損害も dealt と taken の積で効かせる
 targetCastle.factionId = army.factionId;
 setTerritory(targetCastle.q, targetCastle.r, army.factionId); // v7: 落城した城マスも領地が移る
 
@@ -413,11 +433,11 @@ showEventNotice('城が陥落', `${d.name}が守っていた${targetCastle.name}
 if (commander) {
 // 勝利した出撃兵の残存は、指揮官の私兵として攻略城に駐留する
 commander.troops = (commander.troops || 0) + remainingTroops;
+gainOfficerExp(commander, 'valor', 30); // v8/v9 review fix: 成長は所属城が攻略先に移る前に付ける（武門判定を出撃元で効かせる）
+gainOfficerExp(commander, 'leadership', 30);
 commander.castleId = targetCastle.id;
 const meritGain = meritGainFor(commander, 120 + Math.floor(defValor * 0.5));
 commander.merit += meritGain;
-gainOfficerExp(commander, 'valor', 30); // v8: 攻城勝利で成長
-gainOfficerExp(commander, 'leadership', 30);
 bumpOfficerStat(commander, 'castlesTaken');
 addChronicle(`${commander.name}（${factionName}）が ${targetCastle.name} を攻略`, 'siege');
 if (isHuman(commander)) {
@@ -441,7 +461,7 @@ d.troops = Math.max(80, Math.floor((d.troops || 0) * factor));
 }
 
 // 攻撃側の残存兵（35パーセント）は供出者へ比率で返還される
-const survivors = Math.floor(army.troops * 0.35);
+const survivors = Math.floor(army.troops * 0.35 * (2 - stanceOf(army).taken)); // v9: 方針で敗残兵の戻りが変わる
 distributeArmyRemainder(army, survivors);
 
 if (commander) {
