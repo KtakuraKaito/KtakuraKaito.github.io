@@ -6,7 +6,32 @@
     <title>CHRONICLE OF BETRAYAL - 非同期戦略シミュレーション</title>
     <!-- Tailwind CSS (スタイリング用) -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script>
+    // UI刷新: Tailwindの色名をそのまま「黒漆+金+軍色」の役割色に差し替える（クラス名は不変）
+    tailwind.config = { theme: { extend: {
+      fontFamily: { sans: ['"DotGothic16"', '"Noto Sans JP"', 'sans-serif'], serif: ['"Noto Serif JP"', 'serif'], mono: ['"DotGothic16"', 'monospace'] },
+      colors: {
+        slate: {50:'#f5efe0',100:'#efe6cf',200:'#ddd2b4',300:'#c9bb96',400:'#b3a888',500:'#8f8468',600:'#57503c',700:'#3c3626',800:'#2a2416',900:'#1d180e',950:'#120d06'},
+        stone: {50:'#f5efe0',100:'#efe6cf',200:'#ddd2b4',300:'#c9bb96',400:'#b3a888',500:'#8f8468',600:'#57503c',700:'#3c3626',800:'#2a2416',900:'#1d180e',950:'#120d06'},
+        gray:  {50:'#f5efe0',100:'#efe6cf',200:'#ddd2b4',300:'#c9bb96',400:'#b3a888',500:'#8f8468',600:'#57503c',700:'#3c3626',800:'#2a2416',900:'#1d180e',950:'#120d06'},
+        amber: {100:'#f7ead0',200:'#f0dcab',300:'#ecd28f',400:'#d9b95f',500:'#c9a44e',600:'#a8853a',700:'#8a6d2f',800:'#6e5626',900:'#54401d',950:'#2e230e'},
+        yellow:{300:'#ecd28f',400:'#d9b95f',500:'#c9a44e',600:'#a8853a'},
+        emerald:{100:'#e3ecd2',200:'#cdebb0',300:'#b5d69a',400:'#93bd72',500:'#7d9b4e',600:'#647d3a',700:'#4d612c',800:'#3c4c23',900:'#2b3819',950:'#1a240e'},
+        green: {300:'#b5d69a',400:'#93bd72',500:'#7d9b4e',600:'#647d3a',700:'#4d612c',800:'#3c4c23',900:'#2b3819',950:'#1a240e'},
+        teal:  {100:'#e3ecd2',200:'#cdebb0',300:'#b9c98d',400:'#93bd72',500:'#7d9b4e',600:'#647d3a',700:'#4d612c',800:'#3c4c23',900:'#2b3819',950:'#1a240e'},
+        sky:   {100:'#dde7f2',200:'#bccfe8',300:'#a9c3e2',400:'#7d9fc9',500:'#5b84c4',600:'#48699e',700:'#3a557f',800:'#2c4060',900:'#1f2d45',950:'#131c2c'},
+        blue:  {300:'#a9c3e2',400:'#7d9fc9',500:'#5b84c4',600:'#48699e',700:'#3a557f',800:'#2c4060',900:'#1f2d45',950:'#131c2c'},
+        indigo:{300:'#c0b3e0',400:'#a08fc9',500:'#8f7fc4',600:'#71619e',700:'#594b7d',800:'#423861',900:'#2e2745',950:'#1d1830'},
+        purple:{100:'#e6ddf2',200:'#d5c9ec',300:'#c0b3e0',400:'#a08fc9',500:'#8f7fc4',600:'#71619e',700:'#594b7d',800:'#423861',900:'#2e2745',950:'#1c1533'},
+        violet:{200:'#d5c9ec',300:'#c0b3e0',400:'#a08fc9',500:'#8f7fc4',600:'#71619e',700:'#594b7d'},
+        rose:  {100:'#f7d9d4',200:'#f2b8ae',300:'#f0927f',400:'#e0655f',500:'#d84a3a',600:'#b93a2e',700:'#963026',800:'#73261e',900:'#521c16',950:'#33100c'},
+        red:   {300:'#f0927f',400:'#e0655f',500:'#d84a3a',600:'#b93a2e',700:'#963026',800:'#73261e',900:'#521c16',950:'#33100c'},
+        orange:{300:'#eec39a',400:'#dda05e',500:'#c07f4e',600:'#a86830',700:'#8a5527',800:'#6b421f',900:'#4d2f16',950:'#2e1c0c'},
+        lime:  {300:'#cdebb0',400:'#a9c98b',500:'#7d9b4e',600:'#647d3a'}
+      }
+    } } };
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Noto+Serif+JP:wght@400;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body class="h-screen flex flex-col overflow-hidden">
@@ -20,7 +45,7 @@
             </div>
             
             <!-- カレンダー＆時間コントロール -->
-            <div class="flex items-center gap-2 bg-slate-900/90 px-3 py-1.5 rounded-lg border border-slate-700">
+            <div class="flex items-center gap-2 px-1 py-1.5">
                 <div class="text-right pr-2 border-r border-slate-700">
                     <div class="text-xs text-slate-400">経過日数</div>
                     <div id="calendar-display" class="text-base font-bold text-amber-400">1年 1月 1日 (1日目)</div>
@@ -35,7 +60,7 @@
                      <button id="btn-auto-toggle" class="btn-action bg-emerald-700 hover:bg-emerald-600 text-xs font-semibold px-2.5 py-1.5 rounded text-white">
 自動進行: OFF
 </button>
-<button id="btn-chronicle" class="btn-action bg-slate-700 hover:bg-slate-600 text-xs font-semibold px-2.5 py-1.5 rounded text-white" title="戦績とクロニクルを見る">📜 戦績</button>
+<button id="btn-chronicle" class="btn-action bg-slate-700 hover:bg-slate-600 text-xs font-semibold px-2.5 py-1.5 rounded text-white" title="戦績とクロニクルを見る">戦績</button>
 <button id="btn-save-game" class="btn-action bg-slate-700 hover:bg-slate-600 text-xs font-semibold px-2.5 py-1.5 rounded text-white" title="今の状態をブラウザに保存">
 保存
 </button>
@@ -47,7 +72,7 @@
         </div>
 
         <!-- プレイヤー基本ステータスバー -->
-        <div class="flex flex-wrap items-center gap-4 bg-slate-900/80 px-4 py-1.5 rounded-lg border border-slate-800 text-xs">
+        <div class="flex flex-wrap items-center gap-4 px-1 py-1.5 text-xs">
             <div>
                 <span class="text-slate-400 block">身分 / 所属</span>
                 <span id="player-rank-display" class="font-bold text-sm text-sky-400">浪人 (無所属)</span>
@@ -80,11 +105,11 @@
     <main class="flex-1 flex flex-col lg:flex-row overflow-hidden">
         
         <!-- 左側：戦術ヘックスマップ -->
-        <div class="relative flex-1 bg-[#0b0d11] overflow-hidden flex flex-col">
+        <div class="relative flex-1 bg-[#141a10] overflow-hidden flex flex-col">
             <canvas id="map-canvas"></canvas>
             
             <!-- マップ凡例・操作ヒントオーバーレイ -->
-            <div class="absolute top-3 left-3 bg-slate-950/85 border border-slate-800 rounded-lg p-2.5 text-[11px] pointer-events-none backdrop-blur-sm">
+            <div class="absolute top-3 left-3 p-2.5 text-[11px] pointer-events-none map-overlay-text">
                 <div class="font-bold text-slate-300 mb-1">戦術マップ凡例（1マス移動 = 4日）</div>
                 <div class="flex items-center gap-3 text-slate-400">
                     <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-emerald-800 inline-block"></span>平原</span>

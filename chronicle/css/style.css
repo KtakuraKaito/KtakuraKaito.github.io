@@ -1,53 +1,92 @@
-        body {
-            font-family: 'Inter', 'Noto Serif JP', sans-serif;
-            background-color: #0f1115;
-            color: #e2e8f0;
-            user-select: none;
-        }
-        .serif {
-            font-family: 'Noto Serif JP', serif;
-        }
-        /* カスタムスクロールバー */
-        ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #1a1d24;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #3b4252;
-            border-radius: 3px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #4c566a;
-        }
-        canvas {
-            display: block;
-            width: 100%;
-            height: 100%;
-            cursor: pointer;
-        }
-        .panel-border {
-            border: 1px solid #2e3440;
-            background: linear-gradient(145deg, #161920 0%, #111318 100%);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-        }
-        .btn-action {
-            transition: all 0.15s ease;
-        }
-        .btn-action:hover:not(:disabled) {
-            transform: translateY(-1px);
-            filter: brightness(1.15);
-        }
-        .btn-action:active:not(:disabled) {
-            transform: translateY(0);
-        }
-        .btn-action:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-    .notice-card { animation: notice-in .25s ease-out; }
+/* CHRONICLE OF BETRAYAL — UI刷新テーマ: 黒漆+金フレーム（コーエー式）×ドット絵（カイロソフト式）
+   色の役割は index.html の tailwind.config で色名ごと差し替え済み。ここは質感と部品の作法を持つ。 */
+body {
+    font-family: 'DotGothic16', 'Noto Sans JP', sans-serif;
+    background-color: #0d0a06;
+    color: #efe6cf;
+    user-select: none;
+}
+.serif {
+    font-family: 'Noto Serif JP', serif;
+}
+/* カスタムスクロールバー */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: #171208;
+}
+::-webkit-scrollbar-thumb {
+    background: #57503c;
+    border: 1px solid #171208;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #8a743a;
+}
+canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+}
+/* パネル: 黒漆グラデ + 金の細罫 + 内側の二重罫 + ベタ影 */
+.panel-border {
+    border: 1px solid #57503c;
+    background: linear-gradient(160deg, #241b0f 0%, #171208 70%);
+    box-shadow: inset 0 0 0 3px #171208, inset 0 0 0 4px rgba(201, 164, 78, 0.22), 5px 5px 0 rgba(0, 0, 0, 0.35);
+}
+/* ボタン: 下縁を厚くした立体ボタン。色は役割クラスで決まる */
+.btn-action {
+    border: 1px solid #57503c;
+    border-bottom: 3px solid #0a0703;
+    border-radius: 2px !important;
+    background: linear-gradient(#3a2c17, #2c2110);
+    color: #efe6cf;
+    box-shadow: none !important;
+    transition: filter 0.1s ease, transform 0.05s ease;
+}
+.btn-action:hover:not(:disabled) {
+    filter: brightness(1.3);
+}
+.btn-action:active:not(:disabled) {
+    transform: translateY(1px);
+    border-bottom-width: 2px;
+}
+.btn-action:disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+}
+/* Tailwindの金・赤で塗られた既存の主要ボタンも役割色に寄せる */
+.btn-action[class*="bg-amber-"], .btn-action[class*="bg-rose-600"], .btn-action[class*="bg-rose-700"] {
+    background: linear-gradient(#8a6d2f, #6e5626);
+    border-color: #c9a44e;
+    color: #ffe9ad;
+}
+/* 主操作（出陣など）: 金ベタ */
+.btn-main {
+    background: linear-gradient(#8a6d2f, #6e5626) !important;
+    border-color: #c9a44e !important;
+    color: #ffe9ad !important;
+}
+/* 危険・緊急: 赤系 */
+.btn-danger {
+    background: linear-gradient(#6e2a20, #521c16) !important;
+    border-color: #963026 !important;
+    color: #f2b8ae !important;
+}
+/* 地図上の文字だけ表示（カードなし） */
+.map-overlay-text {
+    text-shadow: 0 1px 4px #000, 0 0 10px rgba(0, 0, 0, 0.9);
+}
+/* 顔グラ */
+.face-px {
+    image-rendering: pixelated;
+    flex: none;
+    border: 1px solid rgba(201, 164, 78, 0.35);
+    background: #2a2113;
+}
+.notice-card { animation: notice-in .25s ease-out; }
 .notice-out { opacity: 0; transition: opacity .35s ease; }
 .net-guest #btn-step-day, .net-guest #btn-next-phase, .net-guest #btn-auto-toggle, .net-guest #btn-save-game, .net-guest #btn-reset-game { display: none !important; }
 @keyframes notice-in { from { opacity: 0; transform: translateY(-10px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }

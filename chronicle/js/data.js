@@ -60,25 +60,25 @@ const TROOP_TYPES = {
 const TROOP_TYPE_CHANGE_COST = 150;
 const SAVE_KEY = 'chronicle_of_betrayal_v9'; // v2: 反乱などで新勢力を作るときの発番カウンタ
 const REBEL_COLORS = [
-{ color: '#a855f7', bg: 'rgba(168, 85, 247, 0.25)' },
-{ color: '#f97316', bg: 'rgba(249, 115, 22, 0.25)' },
-{ color: '#06b6d4', bg: 'rgba(6, 182, 212, 0.25)' },
-{ color: '#ec4899', bg: 'rgba(236, 72, 153, 0.25)' },
-{ color: '#84cc16', bg: 'rgba(132, 204, 22, 0.25)' },
-{ color: '#f43f5e', bg: 'rgba(244, 63, 94, 0.25)' }
+{ color: '#8f7fc4', bg: 'rgba(143, 127, 196, 0.22)' },
+{ color: '#c07f4e', bg: 'rgba(192, 127, 78, 0.22)' },
+{ color: '#5b84c4', bg: 'rgba(91, 132, 196, 0.22)' },
+{ color: '#c46a8a', bg: 'rgba(196, 106, 138, 0.22)' },
+{ color: '#7d9b4e', bg: 'rgba(125, 155, 78, 0.22)' },
+{ color: '#d84a3a', bg: 'rgba(216, 74, 58, 0.22)' }
 ];
 
 // 勢力カラー定義
 const FACTIONS = {
-    0: { id: 0, name: '無所属', color: '#64748b', bg: 'rgba(100, 116, 139, 0.25)', targetCastleId: null },
-    1: { id: 1, name: '紅蓮騎士団', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.25)', targetCastleId: null },
-    2: { id: 2, name: '蒼穹公国', color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.25)', targetCastleId: null },
-    3: { id: 3, name: '翡翠同盟', color: '#10b981', bg: 'rgba(16, 185, 129, 0.25)', targetCastleId: null },
-    4: { id: 4, name: '黄金帝国', color: '#eab308', bg: 'rgba(234, 179, 8, 0.25)', targetCastleId: null },
-    5: { id: 5, name: '紫電独立軍', color: '#a855f7', bg: 'rgba(168, 85, 247, 0.25)', targetCastleId: null },
+    0: { id: 0, name: '無所属', color: '#8a8f7d', bg: 'rgba(138, 143, 125, 0.22)', targetCastleId: null },
+    1: { id: 1, name: '紅蓮騎士団', color: '#c05a4e', bg: 'rgba(192, 90, 78, 0.22)', targetCastleId: null },
+    2: { id: 2, name: '蒼穹公国', color: '#5b84c4', bg: 'rgba(91, 132, 196, 0.22)', targetCastleId: null },
+    3: { id: 3, name: '翡翠同盟', color: '#4da583', bg: 'rgba(77, 165, 131, 0.22)', targetCastleId: null },
+    4: { id: 4, name: '黄金帝国', color: '#c9a44e', bg: 'rgba(201, 164, 78, 0.22)', targetCastleId: null },
+    5: { id: 5, name: '紫電独立軍', color: '#8f7fc4', bg: 'rgba(143, 127, 196, 0.22)', targetCastleId: null },
     // v8: 大マップ専用勢力（標準マップでは登場しない）
-    6: { id: 6, name: '白銀聖教国', color: '#c0c8d8', bg: 'rgba(192, 200, 216, 0.25)', targetCastleId: null },
-    7: { id: 7, name: '琥珀通商連合', color: '#a86830', bg: 'rgba(168, 104, 48, 0.25)', targetCastleId: null }
+    6: { id: 6, name: '白銀聖教国', color: '#b9c0c4', bg: 'rgba(185, 192, 196, 0.22)', targetCastleId: null },
+    7: { id: 7, name: '琥珀通商連合', color: '#c07f4e', bg: 'rgba(192, 127, 78, 0.22)', targetCastleId: null }
 };
 // v8 review fix: 勢力定義の初期状態マスター。反乱やロードで FACTIONS が書き換わるため、新規開始時にここから復元する
 const FACTIONS_MASTER = JSON.parse(JSON.stringify(FACTIONS));
@@ -110,10 +110,10 @@ const LARGE_NPC_CONFIGS_EXTRA = [
 const LARGE_NPC_TRAITS_EXTRA = { npc17: 'loyal', npc18: 'domestic', npc19: 'brave', npc20: 'drill', npc21: 'fame', npc22: 'swift', npc23: 'brave', npc24: 'wealth', npc25: 'domestic', npc26: 'fame', npc27: 'ironwall', npc28: 'swift' };
 
 const TERRAIN = {
-    PLAIN: { id: 0, name: '平原', color: '#1a2e22', stroke: '#233d2d' },
-    FOREST: { id: 1, name: '森', color: '#132419', stroke: '#1b3324' },
-    MOUNTAIN: { id: 2, name: '山岳', color: '#292524', stroke: '#3f3a38' },
-    RIVER: { id: 3, name: '河川', color: '#172554', stroke: '#1e3a8a' }
+    PLAIN: { id: 0, name: '平原', color: '#2a331f', stroke: '#39412a' },
+    FOREST: { id: 1, name: '森', color: '#1e2c17', stroke: '#2c4023' },
+    MOUNTAIN: { id: 2, name: '山岳', color: '#37332b', stroke: '#4e493c' },
+    RIVER: { id: 3, name: '河川', color: '#274b5c', stroke: '#38657c' }
 };
 
 // --- v4 追加: 特性定義（文案はGemini作成） ---

@@ -2,6 +2,7 @@
 
 
 function addLog(message, type = 'info') {
+    message = String(message).replace(/^[\u{1F000}-\u{1FAFF}\u{2300}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]+\s*/u, '');
     const logEl = document.getElementById('event-log');
     const entry = document.createElement('div');
     const colors = {
@@ -21,6 +22,42 @@ function addLog(message, type = 'info') {
     if (logEl.children.length > 80) {
         logEl.removeChild(logEl.lastChild);
     }
+}
+
+// --- UI刷新: ドット絵顔グラ（16x18）。髪型・髪色・鎧色（勢力色）を武将ごとに固定生成 ---
+function makeOfficerFace(officer, size = 40) {
+    const cv = document.createElement('canvas');
+    cv.width = 16; cv.height = 18;
+    cv.className = 'face-px';
+    cv.style.width = size + 'px';
+    cv.style.height = Math.round(size * 18 / 16) + 'px';
+    const ctx2 = cv.getContext('2d');
+    if (!ctx2) return cv; // 2D非対応環境（テスト等）では空白のまま返す
+    let h = 0;
+    const idStr = String(officer.id || officer.name || 'x');
+    for (let i = 0; i < idStr.length; i++) h = (h * 31 + idStr.charCodeAt(i)) >>> 0;
+    const hairs = ['#3a2c1c', '#14100c', '#7d4a22', '#8a8f7d', '#5d3a1a', '#2e2a26'];
+    const skins = ['#e8b98d', '#f2c49b', '#dfa878', '#c9997a'];
+    const hair = hairs[h % hairs.length];
+    const skin = skins[(h >> 3) % skins.length];
+    const style = ['knot', 'long', 'helmet', 'beard'][(h >> 5) % 4];
+    const castle = gameState.castles.find(c => c.id === officer.castleId);
+    const armor = castle && FACTIONS[castle.factionId] ? FACTIONS[castle.factionId].color : '#57503c';
+    const R = (x, y, w, hh, c) => { ctx2.fillStyle = c; ctx2.fillRect(x, y, w, hh); };
+    R(0, 0, 16, 18, '#2a2113');
+    if (style === 'long') R(3, 2, 10, 13, hair);
+    if (style === 'beard') R(4, 11, 8, 3, hair);
+    R(4, 4, 8, 8, skin);
+    R(7, 12, 2, 2, '#c9997a');
+    if (style === 'helmet') { R(3, 2, 10, 3, '#9aa2a8'); R(3, 5, 10, 1, '#6e767d'); R(7, 0, 2, 2, '#d84a3a'); }
+    else { R(3, 2, 10, 3, hair); R(3, 2, 2, 7, hair); R(11, 2, 2, 7, hair); if (style === 'knot') R(7, 1, 2, 2, hair); }
+    R(5, 6, 2, 1, hair); R(9, 6, 2, 1, hair);
+    R(5, 7, 1, 2, '#1c1410'); R(10, 7, 1, 2, '#1c1410');
+    R(7, 10, 2, 1, '#a0665a');
+    if (style === 'long') R(12, 4, 1, 1, '#c9a44e');
+    R(2, 14, 12, 4, armor); R(2, 13, 3, 2, armor); R(11, 13, 3, 2, armor);
+    R(7, 13, 2, 4, '#efe6cf');
+    return cv;
 }
 
 // --- v4 追加: 順位表 ---
@@ -354,8 +391,10 @@ function growthText(m) {
 
 function addActionButton(container, label, colorClass, onClick, disabled = false) {
     const btn = document.createElement('button');
-    btn.className = `btn-action ${colorClass} text-xs font-semibold py-2 px-2.5 rounded-lg shadow text-center`;
-    btn.textContent = label;
+    const role = /rose/.test(colorClass) ? 'btn-main' : (/sky-800/.test(colorClass) ? 'btn-danger' : '');
+    const span = /col-span-2/.test(colorClass) ? 'col-span-2' : '';
+    btn.className = `btn-action ${role} ${span} text-xs font-semibold py-2 px-2.5 text-center`;
+    btn.textContent = String(label).replace(/^[\u{1F000}-\u{1FAFF}\u{2300}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]+\s*/u, '');
     btn.disabled = disabled;
     btn.onclick = onClick;
     container.appendChild(btn);
@@ -443,6 +482,8 @@ function renderSelectedCastle() {
                 <div class="text-[11px] ${loyaltyColor}">忠誠: ${isLord ? '城主' : m.loyalty}</div>
             </div>
         `;
+        card.prepend(makeOfficerFace(m, 34));
+        card.style.gap = '8px';
         listEl.appendChild(card);
     });
 }
@@ -1029,14 +1070,14 @@ function drawMap() {
                 const dev = gameState.development[r][q];
                 if (!dev) continue;
                 const p = hexToPixel(q, r);
-                ctx.fillStyle = dev === 1 ? '#fbbf24' : '#e2e8f0';
+                ctx.fillStyle = dev === 1 ? '#d9b95f' : '#efe6cf';
                 ctx.fillText(dev === 1 ? '農' : '関', p.x, p.y - R * 0.42);
             }
         }
     }
     if (gameState.selectedTile) {
         const p = hexToPixel(gameState.selectedTile.q, gameState.selectedTile.r);
-        drawHex(p.x, p.y, R - 1, 'rgba(255,255,255,0.10)', '#f8fafc', 2);
+        drawHex(p.x, p.y, R - 1, 'rgba(201,164,78,0.13)', '#c9a44e', 2);
     }
 
     gameState.castles.forEach(castle => {
@@ -1045,24 +1086,39 @@ function drawMap() {
         const isSelected = castle.id === gameState.selectedCastleId;
 
         if (isSelected) {
-            drawHex(x, y, R + 2, 'transparent', '#fbbf24', 3);
+            drawHex(x, y, R + 2, 'transparent', '#ffe9ad', 3);
         }
 
-        drawHex(x, y, R * 0.72, faction.color, '#0f172a', 2);
+        drawHex(x, y, R * 0.72, faction.color, '#0d0a06', 2);
 
-        ctx.fillStyle = '#ffffff';
-        ctx.font = `bold ${Math.floor(R * 0.55)}px sans-serif`;
+        // 城郭シルエット（ドット絵風）を濃色で抜く
+        const s = R / 32;
+        ctx.fillStyle = 'rgba(13,10,6,0.88)';
+        ctx.beginPath();
+        ctx.moveTo(x - 11 * s, y + 8 * s);
+        ctx.lineTo(x - 11 * s, y - 6 * s); ctx.lineTo(x - 7 * s, y - 6 * s); ctx.lineTo(x - 7 * s, y - 11 * s);
+        ctx.lineTo(x - 3 * s, y - 11 * s); ctx.lineTo(x - 3 * s, y - 6 * s); ctx.lineTo(x + 3 * s, y - 6 * s);
+        ctx.lineTo(x + 3 * s, y - 11 * s); ctx.lineTo(x + 7 * s, y - 11 * s); ctx.lineTo(x + 7 * s, y - 6 * s);
+        ctx.lineTo(x + 11 * s, y - 6 * s); ctx.lineTo(x + 11 * s, y + 8 * s);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = faction.color;
+        ctx.fillRect(x - 2 * s, y + 1 * s, 4 * s, 7 * s);
+
+        // 名前と兵数はカードなしの縁取り文字（モック3方針）
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('♜', x, y - 1);
-
         ctx.font = 'bold 11px "Noto Serif JP", sans-serif';
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillText(castle.name, x, y + R * 0.92);
+        ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(10,8,4,0.92)'; ctx.lineJoin = 'round';
+        ctx.strokeText(castle.name, x, y + R * 0.95);
+        ctx.fillStyle = isSelected ? '#ffe9ad' : '#efe6cf';
+        ctx.fillText(castle.name, x, y + R * 0.95);
 
-        ctx.font = '10px Inter, sans-serif';
-        ctx.fillStyle = '#cbd5e1';
-        ctx.fillText(`兵:${getCastleTroops(castle.id)}`, x, y + R * 1.25);
+        ctx.font = '10px "DotGothic16", monospace';
+        ctx.lineWidth = 3;
+        const troopsText = `兵 ${getCastleTroops(castle.id)}`;
+        ctx.strokeText(troopsText, x, y + R * 1.28);
+        ctx.fillStyle = '#cfc4a4';
+        ctx.fillText(troopsText, x, y + R * 1.28);
     });
 
     gameState.armies.forEach(army => {
@@ -1078,37 +1134,46 @@ function drawMap() {
         ctx.moveTo(cur.x, cur.y);
         (army.path || []).forEach(t => { const p = hexToPixel(t.q, t.r); ctx.lineTo(p.x, p.y); });
         ctx.lineTo(tp.x, tp.y);
-        ctx.strokeStyle = army.type === 'ATTACK' ? '#f43f5e' : '#38bdf8';
+        ctx.strokeStyle = FACTIONS[army.factionId] ? FACTIONS[army.factionId].color : '#8a8f7d';
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.setLineDash([]);
 
+        // 旗マーカー（勢力色の軍旗 + 攻/移）
+        const aFaction = FACTIONS[army.factionId];
+        const aColor = aFaction ? aFaction.color : '#8a8f7d';
+        ctx.strokeStyle = '#0d0a06';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cur.x - 5, cur.y - 10); ctx.lineTo(cur.x - 5, cur.y + 10); ctx.stroke();
         ctx.beginPath();
-        ctx.arc(cur.x, cur.y, 11, 0, Math.PI * 2);
-        ctx.fillStyle = army.type === 'ATTACK' ? '#e11d48' : '#0284c7';
+        ctx.moveTo(cur.x - 5, cur.y - 10); ctx.lineTo(cur.x + 9, cur.y - 6); ctx.lineTo(cur.x - 5, cur.y - 2);
+        ctx.closePath();
+        ctx.fillStyle = aColor;
         ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(13,10,6,0.9)';
+        ctx.lineWidth = 1;
         ctx.stroke();
-
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 10px sans-serif';
+        ctx.fillStyle = '#efe6cf';
+        ctx.font = 'bold 10px "DotGothic16", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(army.type === 'ATTACK' ? '⚔' : '🐎', cur.x, cur.y);
+        ctx.fillText(army.type === 'ATTACK' ? '攻' : '移', cur.x + 1, cur.y + 5);
 
         // v7: 指揮官名・兵力・状態（残日数／待機／帰還）を表示する
         const labelCommander = gameState.officers.find(o => o.id === army.commanderId);
         const labelTroops = army.type === 'ATTACK' ? army.troops : (labelCommander ? labelCommander.troops : 0);
         const stateText = army.order === 'WAIT' ? '待機中' : (army.order === 'RETURN' ? `帰還中 残${army.daysLeft}日` : `残${army.daysLeft}日`);
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-        ctx.fillRect(cur.x - 34, cur.y - 52, 68, 38);
-        ctx.fillStyle = '#fbbf24';
-        ctx.font = 'bold 9px Inter, sans-serif';
-        ctx.fillText(labelCommander ? labelCommander.name : '不明', cur.x, cur.y - 43);
-        ctx.fillStyle = '#f8fafc';
+        ctx.font = 'bold 9px "DotGothic16", sans-serif';
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(10,8,4,0.92)'; ctx.lineJoin = 'round';
+        const labelName = labelCommander ? labelCommander.name : '不明';
+        ctx.strokeText(labelName, cur.x, cur.y - 43);
+        ctx.fillStyle = '#d9b95f';
+        ctx.fillText(labelName, cur.x, cur.y - 43);
+        ctx.strokeText(`${labelTroops}兵`, cur.x, cur.y - 31);
+        ctx.fillStyle = '#efe6cf';
         ctx.fillText(`${labelTroops}兵`, cur.x, cur.y - 31);
-        ctx.fillStyle = '#cbd5e1';
+        ctx.strokeText(stateText, cur.x, cur.y - 19);
+        ctx.fillStyle = '#cfc4a4';
         ctx.fillText(stateText, cur.x, cur.y - 19);
     });
 }
