@@ -36,7 +36,7 @@ function openArmiesModal() {
         const faction = FACTIONS[army.factionId];
         const troops = army.type === 'ATTACK' ? army.troops : (commander ? commander.troops : 0);
         const kind = army.type === 'ATTACK' ? '⚔ 攻撃' : '🐎 移動';
-        const orderText = army.type !== 'ATTACK' ? '' : (army.order === 'WAIT' ? ' / 待機中' : (army.order === 'RETURN' ? ' / 帰還中' : '')) + ((army.forcedUntil && gameState.day <= army.forcedUntil) ? ' / 強行軍中' : '') + ` / 方針:${(STANCES[army.stance] || STANCES.balanced).name}`; // v9: 方針表示
+        const orderText = army.type !== 'ATTACK' ? '' : (army.order === 'WAIT' ? ' / 待機中' : (army.order === 'RETURN' ? ' / 帰還中' : '')) + ((army.forcedUntil && gameState.day <= army.forcedUntil) ? ' / 強行軍中' : '') + ` / 方針:${(STANCES[army.stance] || STANCES.balanced).name}` + (army.supplyReady ? ' / 兵站整備済み' : ''); // v9: 方針表示 / stage E: 兵站表示
         const stats = commander ? `武${commander.valor} 統${commander.leadership} ${TROOP_TYPES[getTroopType(commander)].name}` : '';
         const remainText = army.order === 'WAIT' ? '待機中' : `残${army.daysLeft}日`;
         let orderBtns = '';
@@ -279,6 +279,23 @@ descEl.textContent = '浪人状態です。好きな城へ仕官するか、私�
 addActionButton(btnsEl, '🏰 好きな城へ仕官', 'bg-emerald-600 text-white', () => openEnlistModal());
 addActionButton(btnsEl, '💰 資金工作 (120G)', 'bg-purple-700 text-white', () => openSabotageModal(), player.gold < 120);
 addActionButton(btnsEl, '⏳ 様子を見る (パス)', 'bg-slate-700 text-slate-200', () => finishPlayerPhase());
+} else if (player.isMoving) {
+// v9 stage E: 行軍中の個人フェイズ（野営）。内政や独立出陣はできないが、部隊を鍛え、兵站を整え、指示を出せる
+const army = gameState.armies.find(a => a.commanderId === player.id);
+const homeCastle = gameState.castles.find(c => c.id === player.castleId);
+if (army) {
+const targetCastle = gameState.castles.find(c => c.id === army.targetCastleId);
+descEl.textContent = `行軍中（${targetCastle ? targetCastle.name + 'へ、あと約' + army.daysLeft + '日' : '移動中'}）。野営での訓練や兵站整備、部隊への指示ができます。本拠地: ${homeCastle && homeCastle.factionId === army.factionId ? homeCastle.name : 'なし（陥落）'}`;
+addActionButton(btnsEl, `🏕️ 野営訓練 (${FIELD_TRAIN_COST_G}G / 部隊の兵UP)`, 'bg-orange-600 text-white', () => actionFieldTrain(), player.gold < FIELD_TRAIN_COST_G);
+if (army.type === 'ATTACK') {
+addActionButton(btnsEl, army.supplyReady ? '🎒 兵站整備済み (到着時の攻城+10%)' : `🎒 兵站整備 (${SUPPLY_COST_G}G / 到着時の攻城+10%)`, 'bg-amber-600 text-slate-950 font-bold', () => actionSupplyPrep(), !!army.supplyReady || player.gold < SUPPLY_COST_G);
+}
+addActionButton(btnsEl, '📜 部隊の指示 (目標変更・待機・帰還)', 'bg-sky-700 text-white', () => openArmiesModal());
+addActionButton(btnsEl, '⏭️ 個人フェイズ終了', 'bg-slate-700 text-slate-200 col-span-2', () => finishPlayerPhase());
+} else {
+descEl.textContent = '移動中です。';
+addActionButton(btnsEl, '⏭️ 個人フェイズ終了', 'bg-slate-700 text-slate-200 col-span-2', () => finishPlayerPhase());
+}
 } else {
 const castle = gameState.castles.find(c => c.id === player.castleId);
 descEl.textContent = `${castle.name}に仕官中。私兵 ${player.troops || 0} 兵。内政と訓練で力を蓄え、独立出陣もできます。`;
@@ -311,6 +328,9 @@ addActionButton(btnsEl, `🌾 内政 (指導力${COMMAND_COSTS.domestic} / ${DOM
 addActionButton(btnsEl, `🗡️ 訓練 (指導力${COMMAND_COSTS.train} / ${TRAIN_COST_G}G)`, 'bg-orange-700 text-white', () => actionStrategyTrain(), getCommand(player) < COMMAND_COSTS.train || player.gold < TRAIN_COST_G);
 if (ruler) {
 addActionButton(btnsEl, `🚩 君主大方針の設定 (指導力${COMMAND_COSTS.policy})`, 'bg-indigo-600 text-white col-span-2', () => openPolicyModal(), getCommand(player) < COMMAND_COSTS.policy);
+}
+if (player.isMoving) {
+descEl.textContent += ' ※行軍中のため、伝令で本拠地を指揮しています。';
 }
 addActionButton(btnsEl, '⏭️ 戦略フェイズ終了', 'bg-slate-700 text-slate-200 col-span-2', () => finishPlayerPhase());
 }

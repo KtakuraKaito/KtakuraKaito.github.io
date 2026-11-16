@@ -26,6 +26,8 @@ const ECONOMY_MIN = 50; // v6: 内政の下限（籠城で荒廃してもここ�
 const SIEGE_ECONOMY_DAMAGE = 20; // v6: 城で戦闘が起きるたびの内政低下
 const DOMESTIC_COST_G = 50; // v7: 内政の金コスト（フェイズを終わらせず連打できる代わりに払う）
 const TRAIN_COST_G = 50; // v7: 訓練の金コスト
+const FIELD_TRAIN_COST_G = 30; // v9 stage E: 行軍中の野営訓練の金コスト
+const SUPPLY_COST_G = 100; // v9 stage E: 兵站整備の金コスト
 const COMMAND_COSTS = { attack: 200, recruit: 100, distribute: 50, embezzle: 50, policy: 50, domestic: 50, train: 50, emergencyLevy: 150, forcedMarch: 300, develop: 100 }; // v7/v8: 戦略行動の指導力コスト
 const TERRITORY_INCOME_PER_TILE = 2;
 // v8: 忠誠がこの値を下回ると反乱リスク圏（毎日確率判定、前兆通知あり）

@@ -77,7 +77,7 @@ function canOrderArmy(army, officer) {
     const commander = gameState.officers.find(o => o.id === army.commanderId);
     if (!commander) return false;
     if (commander.id === officer.id) return true;
-    if (!isHuman(commander) && isCastleLord(officer) && officer.castleId === army.originCastleId) {
+    if (!isHuman(commander) && (isCastleLord(officer) || isMarchingLord(officer)) && officer.castleId === army.originCastleId) { // v9 stage E review fix: 行軍中の城主も配下の部隊に指示できる
     const originCastle = gameState.castles.find(c => c.id === army.originCastleId);
     if (originCastle && originCastle.factionId === army.factionId) return true; // v7 review fix: an enemy lord who captured the origin castle gets no orders over its armies
     }
@@ -202,7 +202,7 @@ function advanceOneDay() {
 
     // v7/v9: 指導力の蓄積（城主でいる間、毎日その城主の統率ぶん貯まる。上限は統率×25）
     gameState.officers.forEach(o => {
-        if (isCastleLord(o)) o.command = Math.min(getCommandCap(o), getCommand(o) + (o.leadership || 0));
+        if (isCastleLord(o) || isMarchingLord(o)) o.command = Math.min(getCommandCap(o), getCommand(o) + (o.leadership || 0)); // v9 stage E review fix: 行軍中の城主にも指導力が貯まる
     });
 
     if (gameState.day % 10 === 0) {
@@ -233,13 +233,13 @@ function advanceOneDay() {
     const startOfficerIdx = resumingDay ? gameState.dayResumeIdx : 0;
     for (let oi = startOfficerIdx; oi < gameState.officers.length; oi++) {
         const officer = gameState.officers[oi];
-        if (officer.isMoving) continue;
+        // v9 stage E: 行軍中の武将にも手番を回す（個人は野営フェイズ、城主は伝令で戦略フェイズ）
 
         const interval = calcActionInterval(officer);
 
         if (gameState.day >= officer.nextPersonalDay) {
             officer.nextPersonalDay = gameState.day + interval;
-            if (isCastleLord(officer)) {
+            if (isCastleLord(officer) || isMarchingLord(officer)) {
                 officer.nextStrategyDay = gameState.day + Math.floor(interval / 2);
             }
 
@@ -251,13 +251,16 @@ function advanceOneDay() {
                 if (officer.control === 'remote') { netSync(); updateUI(); } else { showHandover(); }
                 return;
             } else {
-                executeNpcPersonalPhase(officer);
+                if (officer.isMoving) executeNpcMarchPersonal(officer); else executeNpcPersonalPhase(officer);
             }
         }
 
         if (officer.nextStrategyDay !== null && gameState.day >= officer.nextStrategyDay) {
             officer.nextStrategyDay = null;
-            if (isCastleLord(officer)) {
+            // v9 stage E: 本来の城主が行軍中なら、その城の戦略フェイズは行軍中の城主が伝令で取る（留守の代理は譲る）
+            const topAny = officer.castleId ? castleTopOfficer(officer.castleId) : null;
+            const marchingTopAway = !!(topAny && topAny.isMoving && topAny.id !== officer.id);
+            if (!marchingTopAway && (isCastleLord(officer) || isMarchingLord(officer))) {
                 if (isHuman(officer)) {
                     pauseAutoTimer();
                     gameState.pendingPhase = { officerId: officer.id, type: 'STRATEGY' };
@@ -356,6 +359,53 @@ runWorldEvent();
 maybeVisitor();
 }
 
+// v9 stage E: 行軍中のNPCの個人フェイズ（野営訓練のみ。部隊を鍛える）
+function executeNpcMarchPersonal(npc) {
+    const army = gameState.armies.find(a => a.commanderId === npc.id);
+    if (!army) return;
+    if (army.type === 'ATTACK') {
+        army.troops += calcTrainGain({ troops: army.troops, leadership: npc.leadership, trait: npc.trait });
+    } else {
+        npc.troops = (npc.troops || 0) + calcTrainGain(npc);
+    }
+}
+
+// v9 stage E: 行軍中の野営訓練（プレイヤー用）。部隊の兵を増やし、武勇と統率が育つ
+function doFieldTrainWork(officer, army) {
+    const base = army.type === 'ATTACK' ? army.troops : (officer.troops || 0);
+    const gain = calcTrainGain({ troops: base, leadership: officer.leadership, trait: officer.trait });
+    if (army.type === 'ATTACK') army.troops += gain; else officer.troops = (officer.troops || 0) + gain;
+    gainOfficerExp(officer, 'valor', 10);
+    gainOfficerExp(officer, 'leadership', 10);
+    addLog(`${officer.name}は行軍中の野営で訓練を行い、兵が +${gain} 増えました。`, 'good');
+}
+
+function actionFieldTrain() {
+    if (netGuestGate('actionFieldTrain', [])) return;
+    const player = getPlayer();
+    if (!player || !player.isMoving) return;
+    const army = gameState.armies.find(a => a.commanderId === player.id);
+    if (!army) return;
+    if ((player.gold || 0) < FIELD_TRAIN_COST_G) { addLog(`野営訓練には ${FIELD_TRAIN_COST_G}G が必要です（所持金不足）。`, 'warn'); updateUI(); return; }
+    player.gold -= FIELD_TRAIN_COST_G;
+    doFieldTrainWork(player, army);
+    refreshPhasePanel();
+}
+
+// v9 stage E: 兵站整備（部隊ごとに1回まで。到着時の攻城戦で攻撃力+10%）
+function actionSupplyPrep() {
+    if (netGuestGate('actionSupplyPrep', [])) return;
+    const player = getPlayer();
+    if (!player || !player.isMoving) return;
+    const army = gameState.armies.find(a => a.commanderId === player.id && a.type === 'ATTACK');
+    if (!army || army.supplyReady) return;
+    if ((player.gold || 0) < SUPPLY_COST_G) { addLog(`兵站整備には ${SUPPLY_COST_G}G が必要です（所持金不足）。`, 'warn'); updateUI(); return; }
+    player.gold -= SUPPLY_COST_G;
+    army.supplyReady = true;
+    addLog(`${player.name}は兵站を整備しました。到着時の攻城戦で攻撃力が上がります。`, 'good');
+    refreshPhasePanel();
+}
+
 function executeNpcPersonalPhase(npc) {
 if (npc.castleId === null) {
 const candidates = gameState.castles.filter(c => getCastleOfficers(c.id).length < MAX_CASTLE_OFFICERS);
@@ -439,7 +489,7 @@ if (castle.npcLevyMonth !== npcMonth && castle.treasury >= 600) {
 }
 
 // v2: 徴兵は城プールではなく城主自身の私兵を増やす
-if ((lord.troops || 0) < 2600 && castle.treasury >= 200 && spendCommand(lord, COMMAND_COSTS.recruit)) {
+if (!isMarchingLord(lord) && (lord.troops || 0) < 2600 && castle.treasury >= 200 && spendCommand(lord, COMMAND_COSTS.recruit)) { // v9 stage E review fix: 行軍中の城主は徴兵しない
 castle.treasury -= 150;
 lord.troops = (lord.troops || 0) + 400;
 return;
@@ -454,7 +504,7 @@ let targetCastle = null;
 let chosenPlan = null;
 let chosenCommander = null;
 
-const commanderCandidates = members.length > 0? [members[0], lord]: [lord];
+const commanderCandidates = (members.length > 0? [members[0], lord]: [lord]).filter(o => o && !o.isMoving); // v9 stage E: 行軍中は指揮官にできない
 const tryTarget = (candidate) => {
 if (!candidate || candidate.factionId === castle.factionId) return false;
 if (calcDistance(castle.q, castle.r, candidate.q, candidate.r) > 8) return false;
@@ -573,7 +623,7 @@ gameState.activePhase = null;
 gameState.activeOfficerId = null;
 syncCastleLords();
 // v7 review fix: an officer promoted to castle lord during their personal phase still gets a strategy phase this cycle
-if (finishedOfficer && finishedPhaseType === 'PERSONAL' && !finishedOfficer.isMoving && finishedOfficer.nextStrategyDay === null && isCastleLord(finishedOfficer)) {
+if (finishedOfficer && finishedPhaseType === 'PERSONAL' && finishedOfficer.nextStrategyDay === null && (isCastleLord(finishedOfficer) || isMarchingLord(finishedOfficer))) { // v9 stage E review fix: 行軍中の城主にも補完する
 finishedOfficer.nextStrategyDay = gameState.day + Math.floor(calcActionInterval(finishedOfficer) / 2);
 }
 updateUI();
@@ -786,7 +836,8 @@ function actionEmergencyLevy() {
     if (netGuestGate('actionEmergencyLevy', [])) return;
     const player = getPlayer();
     if (!player) return;
-    if (!isCastleLord(player)) return;
+    if (!isCastleLord(player) && !isMarchingLord(player)) return; // v9 stage E: 行軍中の城主も伝令で徴兵できる
+    if (player.isMoving && gameState.activePhase !== 'STRATEGY') return; // v9 stage E review fix: 伝令の緊急徴兵は戦略フェイズでのみ
     const castle = gameState.castles.find(c => c.id === player.castleId);
     const cost = 450;
     if (!castle || castle.treasury < cost) return;
@@ -803,7 +854,7 @@ function canForceMarch(army, officer) {
     if (army.forcedUntil && gameState.day <= army.forcedUntil) return false;
     const origin = gameState.castles.find(c => c.id === army.originCastleId);
     if (!origin || origin.factionId !== army.factionId) return false;
-    if (!isCastleLord(officer) || officer.castleId !== origin.id) return false;
+    if ((!isCastleLord(officer) && !isMarchingLord(officer)) || officer.castleId !== origin.id) return false; // v9 stage E review fix: 行軍中の城主も強行軍を命じられる
     return getCommand(officer) >= COMMAND_COSTS.forcedMarch;
 }
 function actionForcedMarch(armyId) {
@@ -830,7 +881,7 @@ function actionForcedMarch(armyId) {
 const DEVELOP_COSTS = { 1: 200, 2: 300 };
 function canDevelopTile(officer, q, r) {
     if (!Number.isInteger(q) || !Number.isInteger(r) || q < 0 || q >= MAP_COLS || r < 0 || r >= MAP_ROWS) return false; // v8 review fix: 座標の型と範囲を検証する
-    if (!officer || !isCastleLord(officer)) return false;
+    if (!officer || (!isCastleLord(officer) && !isMarchingLord(officer))) return false; // v9 stage E: 行軍中の城主も伝令で開発できる
     if (gameState.castles.some(c => c.q === q && c.r === r)) return false;
     const castle = gameState.castles.find(c => c.id === officer.castleId);
     if (!castle) return false;
@@ -954,9 +1005,10 @@ if (o) o.troops = Math.max(0, (o.troops || 0) - c.amount);
 
 const travel = calcTravelInfo(origin, target, commander);
 
+const topBefore = castleTopOfficer(origin.id); // 出陣前の筆頭判定（isMoving を立てた後は本人が候補から外れるため先に取る）
 commander.isMoving = true;
 if (gameState.activeOfficerId && commander.id === gameState.activeOfficerId) {
-commander.nextStrategyDay = null;
+if (!topBefore || topBefore.id !== commander.id) commander.nextStrategyDay = null; // v9 stage E review fix: 行軍中の城主になる場合は伝令の戦略フェイズ用に予約を残す
 }
 
 gameState.armies.push({

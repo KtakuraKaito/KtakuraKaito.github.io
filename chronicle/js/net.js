@@ -3,10 +3,11 @@
 
 // --- v5 追加: オンライン対戦（PeerJS・ホスト権威方式） ---
 const NET_PREFIX = 'cob-v9-';
-const NET_ACTION_WHITELIST = ['actionEnlist', 'actionDomesticAffairs', 'actionTrain', 'actionRelocate', 'actionBribeSabotage', 'actionResign', 'actionRecruit', 'actionDistributeFunds', 'actionEmbezzle', 'actionLaunchAttack', 'actionSetFactionPolicy', 'actionStrategyDomestic', 'actionStrategyTrain', 'actionEmergencyLevy', 'actionChangeTroopType'];
+const NET_ACTION_WHITELIST = ['actionEnlist', 'actionDomesticAffairs', 'actionTrain', 'actionRelocate', 'actionBribeSabotage', 'actionResign', 'actionRecruit', 'actionDistributeFunds', 'actionEmbezzle', 'actionLaunchAttack', 'actionSetFactionPolicy', 'actionStrategyDomestic', 'actionStrategyTrain', 'actionEmergencyLevy', 'actionChangeTroopType', 'actionFieldTrain', 'actionSupplyPrep'];
 const NET_ACTION_PHASE = {
     actionEnlist: 'PERSONAL', actionDomesticAffairs: 'PERSONAL', actionTrain: 'PERSONAL',
     actionRelocate: 'PERSONAL', actionBribeSabotage: 'PERSONAL', actionResign: 'PERSONAL', actionChangeTroopType: 'PERSONAL',
+    actionFieldTrain: 'PERSONAL', actionSupplyPrep: 'PERSONAL',
     actionRecruit: 'STRATEGY', actionDistributeFunds: 'STRATEGY', actionEmbezzle: 'STRATEGY',
     actionSetFactionPolicy: 'STRATEGY', actionStrategyDomestic: 'STRATEGY', actionStrategyTrain: 'STRATEGY', actionLaunchAttack: null
 };

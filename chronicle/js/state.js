@@ -322,6 +322,29 @@ function isCastleLord(officer) {
     return lord && lord.id === officer.id;
 }
 
+// v9 stage E: 行軍中も含めた、その城の最上位の武将（功績順）
+function castleTopOfficer(castleId) {
+    const castle = gameState.castles.find(c => c.id === castleId);
+    const list = gameState.officers.filter(o => {
+        if (o.castleId !== castleId) return false;
+        if (!o.isMoving) return true;
+        const army = gameState.armies.find(a => a.commanderId === o.id);
+        return !!army && !!castle && army.factionId === castle.factionId; // v9 stage E review fix: 陥落した城に旧勢力の行軍中武将を数えない
+    }).sort((a, b) => b.merit - a.merit);
+    return list.length > 0 ? list[0] : null;
+}
+
+// v9 stage E: 行軍中だが本来その城の城主である武将（本拠地が自勢力のままのときだけ）
+function isMarchingLord(officer) {
+    if (!officer || !officer.isMoving || !officer.castleId) return false;
+    const castle = gameState.castles.find(c => c.id === officer.castleId);
+    if (!castle) return false;
+    const army = gameState.armies.find(a => a.commanderId === officer.id);
+    if (!army || castle.factionId !== army.factionId) return false; // 武将に勢力IDはなく、率いる部隊の勢力で判定する
+    const top = castleTopOfficer(officer.castleId);
+    return !!top && top.id === officer.id;
+}
+
 function isFactionRuler(officer) {
     if (!isCastleLord(officer)) return false;
     const castle = gameState.castles.find(c => c.id === officer.castleId);

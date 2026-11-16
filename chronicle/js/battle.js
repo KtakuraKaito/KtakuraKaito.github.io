@@ -406,6 +406,7 @@ if (commander && commander.trait === 'brave') atkPower *= 1.15;
 if (commander) atkPower *= troopTypeModifier(commander, null, 'siege-attack'); // v8: 歩兵の攻城 +10%
 atkPower *= stanceOf(army).dealt; // v9: 部隊方針（与える損害）
 if (typeof getSeason === 'function' && getSeason(gameState.day).id === 'winter') atkPower *= 0.9; // v9: 冬の攻城は1割不利
+if (army.supplyReady) { atkPower *= 1.1; army.supplyReady = false; } // v9 stage E: 兵站整備（1回限り）
 let defPower = (defTroops + 100) * (1 + defValor / 100) * (0.95 + Math.random() * 0.2) * getSiegeBuff(targetCastle) * castleDefenseFactor(targetCastle); // v9: 要塞補正
 if (defLord && defLord.trait === 'ironwall') defPower *= 1.15;
 if (defLord) defPower *= troopTypeModifier(defLord, null, 'siege-defense'); // v8: 歩兵の守備 +10%
