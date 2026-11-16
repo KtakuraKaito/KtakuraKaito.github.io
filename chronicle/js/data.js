@@ -28,8 +28,19 @@ const DOMESTIC_COST_G = 50; // v7: 内政の金コスト（フェイズを終わ
 const TRAIN_COST_G = 50; // v7: 訓練の金コスト
 const FIELD_TRAIN_COST_G = 30; // v9 stage E: 行軍中の野営訓練の金コスト
 const SUPPLY_COST_G = 100; // v9 stage E: 兵站整備の金コスト
-const COMMAND_COSTS = { attack: 200, recruit: 100, distribute: 50, embezzle: 50, policy: 50, domestic: 50, train: 50, emergencyLevy: 150, forcedMarch: 300, develop: 100 }; // v7/v8: 戦略行動の指導力コスト
+const COMMAND_COSTS = { attack: 200, recruit: 100, distribute: 50, embezzle: 50, policy: 50, domestic: 50, train: 50, emergencyLevy: 150, forcedMarch: 300, develop: 100, fort: 30 }; // v7/v8: 戦略行動の指導力コスト / v9 stage F: 支砦建設
 const TERRITORY_INCOME_PER_TILE = 2;
+
+// v9 stage F: 支砦（前線の拠点。領地は城と支砦のアンカーで決まり、部隊が止まっただけでは変わらない）
+const FORT_MAX_PER_CASTLE = 2; // 1城あたりの支砦の上限
+const FORT_GARRISON = 600; // 建設時に城の駐留兵から割く守備兵力
+const FORT_DEFENSE_MULT = 1.5; // 支砦の要塞化ボーナス（守備力 = 守備兵力 × これ）
+const FORT_CAPTURE_GARRISON = 300; // 攻略した支砦に勝った部隊から置く守備兵力
+const FORT_RADIUS = 2; // 支砦が領地として主張する半径
+const CASTLE_TERRITORY_RADIUS = 3; // 城が領地として主張する半径
+const FORT_BUILD_RANGE = 3; // 支砦を建てられる本拠の城からの距離
+const FORT_SUPPORT_RATE = 0.08; // 支砦1つが本拠の城の攻城守備に与える援護バフ
+const TERRITORY_BUFF = 1.1; // 自勢力の領地マスで戦う側の戦力バフ
 // v8: 忠誠がこの値を下回ると反乱リスク圏（毎日確率判定、前兆通知あり）
 const REBELLION_LOYALTY_THRESHOLD = 50;
 

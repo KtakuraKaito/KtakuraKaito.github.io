@@ -85,7 +85,8 @@ function canOrderArmy(army, officer) {
 }
 
 // v7: 部隊指示の適用（目標変更・待機・帰還）。成功したら true
-function setArmyOrder(army, kind, targetCastleId) {
+// v9 stage F: kind 'TILE' で任意のマスを目標にできる（targetTile = {q, r}）
+function setArmyOrder(army, kind, targetCastleId, targetTile) {
     const commander = gameState.officers.find(o => o.id === army.commanderId);
     const cmdName = commander ? commander.name : '部隊';
     if (kind === 'WAIT') {
@@ -100,6 +101,7 @@ function setArmyOrder(army, kind, targetCastleId) {
         if (army.order === 'RETURN') return false; // v7 review fix: same as WAIT
         army.order = 'RETURN';
         army.targetCastleId = origin.id;
+        army.targetTile = null;
         army.path = findPath(army.posQ, army.posR, origin.q, origin.r, army.factionId);
         army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId, army.forcedUntil || 0));
         addLog(`${cmdName} 隊に ${origin.name} への帰還命令が出ました。`, 'info');
@@ -111,19 +113,34 @@ function setArmyOrder(army, kind, targetCastleId) {
         if (target.id === army.targetCastleId && army.order !== 'WAIT') return false;
         army.order = 'ADVANCE';
         army.targetCastleId = target.id;
+        army.targetTile = null;
         army.path = findPath(army.posQ, army.posR, target.q, target.r, army.factionId);
         army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId, army.forcedUntil || 0));
         addLog(`${cmdName} 隊の目標が ${target.name} に変更されました。`, 'info');
+        return true;
+    }
+    if (kind === 'TILE') {
+        if (!targetTile || !Number.isInteger(targetTile.q) || !Number.isInteger(targetTile.r)) return false;
+        if (targetTile.q < 0 || targetTile.q >= MAP_COLS || targetTile.r < 0 || targetTile.r >= MAP_ROWS) return false;
+        if (typeof army.posQ !== 'number') return false;
+        if (gameState.castles.some(c => c.q === targetTile.q && c.r === targetTile.r)) return false; // 城マスは城目標で指定する
+        if (!army.targetCastleId && army.targetTile && army.targetTile.q === targetTile.q && army.targetTile.r === targetTile.r && army.order !== 'WAIT') return false;
+        army.order = 'ADVANCE';
+        army.targetCastleId = null;
+        army.targetTile = { q: targetTile.q, r: targetTile.r };
+        army.path = findPath(army.posQ, army.posR, targetTile.q, targetTile.r, army.factionId);
+        army.daysLeft = Math.max(1, estimateDaysForPath(army.path, commander, army.factionId, army.forcedUntil || 0));
+        addLog(`${cmdName} 隊の目標がマス (${targetTile.q}, ${targetTile.r}) に変更されました。`, 'info');
         return true;
     }
     return false;
 }
 
 // v7: 部隊指示の入口（ゲストはホストへ送信、ホスト・ローカルは即適用）
-function actionArmyOrder(armyId, kind, targetCastleId) {
+function actionArmyOrder(armyId, kind, targetCastleId, targetTile) {
     if (gameState.netMode === 'guest') {
         if (netHostConn && netHostConn.open !== false) {
-            try { netHostConn.send({ type: 'order', armyId, kind, targetCastleId: (typeof targetCastleId === 'number') ? targetCastleId : null }); } catch (e) { /* noop */ }
+            try { netHostConn.send({ type: 'order', armyId, kind, targetCastleId: (typeof targetCastleId === 'number') ? targetCastleId : null, targetQ: (targetTile && Number.isInteger(targetTile.q)) ? targetTile.q : null, targetR: (targetTile && Number.isInteger(targetTile.r)) ? targetTile.r : null }); } catch (e) { /* noop */ }
         }
         return;
     }
@@ -131,7 +148,7 @@ function actionArmyOrder(armyId, kind, targetCastleId) {
     const army = gameState.armies.find(a => a.id === armyId);
     const viewer = getPlayer();
     if (!army || !canOrderArmy(army, viewer)) return;
-    if (setArmyOrder(army, kind, targetCastleId)) { saveGame(); netSync(); }
+    if (setArmyOrder(army, kind, targetCastleId, targetTile)) { saveGame(); netSync(); }
 }
 
 function playerRankOf(player) {
@@ -223,7 +240,6 @@ function advanceOneDay() {
 
     processArmiesMovement();
     processFieldBattles();
-    processTerritoryClaims();
     syncCastleLords();
     processDailyRebellions();
     if (gameState.pendingRebellion) { updateUI(); drawMap(); saveGame(); return; } // v8 review fix: 決起判断が出るまでその日の残り処理を止める
@@ -485,6 +501,29 @@ if (castle.npcLevyMonth !== npcMonth && castle.treasury >= 600) {
         castle.npcLevyMonth = npcMonth;
         addLog(`${castle.name}で緊急徴兵が行われ、${lord.name}の私兵が増えました。`, 'info');
         return;
+    }
+}
+
+// v9 stage F: NPCも支砦を建てる（月1回まで。資金に余裕があり、敵城が8マス以内にある城だけ。最も敵に近い有効マスへ）
+if (castle.npcFortMonth !== npcMonth && castle.treasury >= 1200 && fortsOfCastle(castle.id, castle.factionId).length < FORT_MAX_PER_CASTLE && getCastleTroops(castle.id) >= FORT_GARRISON + 800) {
+    const npcEnemies = gameState.castles.filter(c => c.factionId !== castle.factionId);
+    const nearestEnemy = npcEnemies.reduce((m, e) => Math.min(m, calcDistance(castle.q, castle.r, e.q, e.r)), Infinity);
+    if (nearestEnemy <= 8) {
+        let bestFortTile = null;
+        let bestFortScore = Infinity;
+        for (let fr = 0; fr < MAP_ROWS; fr++) for (let fq = 0; fq < MAP_COLS; fq++) {
+            if (!canBuildFort(lord, fq, fr)) continue;
+            const score = npcEnemies.reduce((m, e) => Math.min(m, calcDistance(fq, fr, e.q, e.r)), Infinity);
+            if (score < bestFortScore) { bestFortScore = score; bestFortTile = { q: fq, r: fr }; }
+        }
+        if (bestFortTile && spendCommand(lord, COMMAND_COSTS.fort)) {
+            const npcFortCost = fortBuildCost(castle);
+            castle.treasury -= npcFortCost;
+            if (buildFortAt(castle, bestFortTile.q, bestFortTile.r)) {
+                castle.npcFortMonth = npcMonth;
+                addLog(`${castle.name}が前線の (${bestFortTile.q}, ${bestFortTile.r}) に支砦を建設しました。`, 'info');
+            } else { castle.treasury += npcFortCost; lord.command = (lord.command || 0) + COMMAND_COSTS.fort; } // Copilot指摘: 失敗時は返還
+        }
     }
 }
 
@@ -883,6 +922,7 @@ function canDevelopTile(officer, q, r) {
     if (!Number.isInteger(q) || !Number.isInteger(r) || q < 0 || q >= MAP_COLS || r < 0 || r >= MAP_ROWS) return false; // v8 review fix: 座標の型と範囲を検証する
     if (!officer || (!isCastleLord(officer) && !isMarchingLord(officer))) return false; // v9 stage E: 行軍中の城主も伝令で開発できる
     if (gameState.castles.some(c => c.q === q && c.r === r)) return false;
+    if (fortAt(q, r)) return false; // v9 stage F: 支砦のあるマスは開発できない
     const castle = gameState.castles.find(c => c.id === officer.castleId);
     if (!castle) return false;
     if (getTerritory(q, r) !== castle.factionId) return false;
@@ -904,6 +944,78 @@ function actionDevelopTile(q, r, kind) {
     castle.treasury -= goldCost;
     setDevelopment(q, r, kind);
     addLog(`${castle.name}の領地 (${q}, ${r}) に${kind === 1 ? '農地' : '関所'}を開発しました。`, 'good');
+    saveGame();
+    netSync();
+    updateUI();
+    drawMap();
+    if (typeof renderSelectedTile === 'function') renderSelectedTile();
+}
+
+// v9 stage F: 支砦（前線拠点）。城から FORT_BUILD_RANGE 以内の自領地に建て、半径 FORT_RADIUS の領地アンカーになる。
+const FORT_COSTS = [400, 700]; // 1つ目 / 2つ目の建設費（城の共有資金から）
+function fortsOfCastle(castleId, factionId) {
+    return (gameState.forts || []).filter(f => f.homeCastleId === castleId && (factionId === undefined || f.factionId === factionId));
+}
+function fortBuildCost(castle) {
+    const n = fortsOfCastle(castle.id, castle.factionId).length;
+    return FORT_COSTS[Math.min(n, FORT_COSTS.length - 1)];
+}
+function canBuildFort(officer, q, r) {
+    if (!Number.isInteger(q) || !Number.isInteger(r) || q < 0 || q >= MAP_COLS || r < 0 || r >= MAP_ROWS) return false;
+    if (!officer || (!isCastleLord(officer) && !isMarchingLord(officer))) return false; // 城主（行軍中は伝令）だけが建てられる
+    const castle = gameState.castles.find(c => c.id === officer.castleId);
+    if (!castle) return false;
+    const d = calcDistance(castle.q, castle.r, q, r);
+    if (d === 0 || d > FORT_BUILD_RANGE) return false;
+    if (getTerritory(q, r) !== castle.factionId) return false; // 自勢力の色のマスだけ
+    if (gameState.castles.some(c => c.q === q && c.r === r)) return false;
+    if (fortAt(q, r)) return false;
+    if (getDevelopment(q, r) !== 0) return false; // 施設のあるマスには建てられない
+    const cell = gameState.mapGrid[r] && gameState.mapGrid[r][q];
+    if (cell && cell.terrain && cell.terrain.id === 3) return false; // 河川には建てられない
+    if (gameState.armies.some(a => a.factionId !== castle.factionId && a.posQ === q && a.posR === r)) return false; // 敵部隊のいるマスには建てられない
+    if (fortsOfCastle(castle.id, castle.factionId).length >= FORT_MAX_PER_CASTLE) return false;
+    return true;
+}
+// 城の駐留兵から amount を兵力の多い順に差し引く。総兵力が足りなければ何もせず false
+function deductCastleTroops(castleId, amount) {
+    const members = getCastleOfficers(castleId).slice().sort((a, b) => (b.troops || 0) - (a.troops || 0));
+    if (members.reduce((s, o) => s + (o.troops || 0), 0) < amount) return false;
+    let left = amount;
+    for (const o of members) {
+        const take = Math.min(o.troops || 0, left);
+        o.troops = (o.troops || 0) - take;
+        left -= take;
+        if (left <= 0) break;
+    }
+    return true;
+}
+// 支払い済みの前提で支砦を実体化する（プレイヤー・NPC・オンラインの共通処理）
+function buildFortAt(castle, q, r) {
+    if (!deductCastleTroops(castle.id, FORT_GARRISON)) return null;
+    const fort = { id: 'fort_' + Date.now() + '_' + Math.floor(Math.random() * 1e6), q, r, factionId: castle.factionId, homeCastleId: castle.id, garrison: FORT_GARRISON };
+    if (!Array.isArray(gameState.forts)) gameState.forts = [];
+    gameState.forts.push(fort);
+    recomputeTerritory();
+    return fort;
+}
+function actionBuildFort(q, r) {
+    if (gameState.netMode === 'guest') {
+        if (netHostConn && netHostConn.open) netHostConn.send({ type: 'fort', q, r });
+        return;
+    }
+    if (isHostRemoteLock()) return;
+    const officer = getPlayer();
+    if (!officer || !canBuildFort(officer, q, r)) return;
+    const castle = gameState.castles.find(c => c.id === officer.castleId);
+    const cost = fortBuildCost(castle);
+    if (!castle || castle.treasury < cost) { addLog('共有資金が不足しています。', 'warn'); return; }
+    if (getCastleTroops(castle.id) < FORT_GARRISON) { addLog(`支砦の守備に割く兵力が不足しています（城の駐留 ${FORT_GARRISON} 兵が必要）。`, 'warn'); return; }
+    if (!spendCommand(officer, COMMAND_COSTS.fort)) { addLog(`指導力が不足しています（支砦建設には ${COMMAND_COSTS.fort} 必要）。`, 'warn'); updateUI(); return; }
+    castle.treasury -= cost;
+    const builtFort = buildFortAt(castle, q, r);
+    if (!builtFort) { castle.treasury += cost; officer.command = (officer.command || 0) + COMMAND_COSTS.fort; addLog('支砦の建設に失敗しました（資金と指導力は返還されました）。', 'warn'); updateUI(); return; } // Copilot指摘: 失敗時に資源だけ失われないように
+    addLog(`${castle.name}の支砦を (${q}, ${r}) に建設しました（守備 ${FORT_GARRISON} 兵）。周辺の領地が自勢力に固まりました。`, 'good');
     saveGame();
     netSync();
     updateUI();
@@ -955,15 +1067,22 @@ addLog(`${castle.name}の共有資金から ${amount}G を私財に引き出し�
 finishPlayerPhase();
 }
 
-function actionLaunchAttack(originCastleId, targetCastleId, commanderId, mode = 'strategy', dispatchTotal = null, stance = null) {
-    if (netGuestGate('actionLaunchAttack', [originCastleId, targetCastleId, commanderId, mode, dispatchTotal, stance])) return;
+function actionLaunchAttack(originCastleId, targetCastleId, commanderId, mode = 'strategy', dispatchTotal = null, stance = null, targetQ = null, targetR = null) {
+    if (netGuestGate('actionLaunchAttack', [originCastleId, targetCastleId, commanderId, mode, dispatchTotal, stance, targetQ, targetR])) return;
     const stanceId = (stance && Object.prototype.hasOwnProperty.call(STANCES, stance)) ? stance : 'balanced'; // v9 review fix: 原型プロパティ（toString等）を不正値として弾く
     if (mode !== 'independent') mode = 'strategy'; // v9 review fix: 不正な mode でフェイズ確認と指導力コストを回避できないようにする
 const origin = gameState.castles.find(c => c.id === originCastleId);
-const target = gameState.castles.find(c => c.id === targetCastleId);
+let target = gameState.castles.find(c => c.id === targetCastleId);
 const commander = gameState.officers.find(o => o.id === commanderId);
-if (!origin ||!target ||!commander) return;
-if (target.factionId === origin.factionId) return; // 同勢力の城は攻撃できない（モーダル側でも除外済み）
+// v9 stage F: マス目標（targetQ/targetR が両方そろった場合のみ有効。城マスを指定したらその城目標に読み替える）
+let targetTile = null;
+if (!target && Number.isInteger(targetQ) && Number.isInteger(targetR) && targetQ >= 0 && targetQ < MAP_COLS && targetR >= 0 && targetR < MAP_ROWS) {
+const castleOnTile = gameState.castles.find(c => c.q === targetQ && c.r === targetR);
+if (castleOnTile) target = castleOnTile;
+else targetTile = { q: targetQ, r: targetR };
+}
+if (!origin || (!target && !targetTile) || !commander) return;
+if (target && target.factionId === origin.factionId) return; // 同勢力の城は攻撃できない（モーダル側でも除外済み）
 if (commander.castleId !== originCastleId || commander.isMoving) return; // 指揮官は出撃元の城に駐留する武将のみ（Copilotレビュー指摘）
 // v7 review fix: inside a phase, the sortie must belong to the phase owner (no launching other castles' or other officers' armies)
 if (gameState.activeOfficerId) {
@@ -1003,7 +1122,7 @@ const o = gameState.officers.find(x => x.id === c.officerId);
 if (o) o.troops = Math.max(0, (o.troops || 0) - c.amount);
 });
 
-const travel = calcTravelInfo(origin, target, commander);
+const travel = calcTravelInfo(origin, target ? target : { q: targetTile.q, r: targetTile.r }, commander);
 
 const topBefore = castleTopOfficer(origin.id); // 出陣前の筆頭判定（isMoving を立てた後は本人が候補から外れるため先に取る）
 commander.isMoving = true;
@@ -1017,7 +1136,8 @@ type: 'ATTACK',
 stance: stanceId, // v9: 部隊方針
 factionId: origin.factionId,
 originCastleId: origin.id,
-targetCastleId: target.id,
+targetCastleId: target ? target.id : null,
+targetTile: targetTile, // v9 stage F: マス目標（城目標のときは null）
 commanderId: commander.id,
 troops: sendTroops,
 contributions,
@@ -1028,7 +1148,7 @@ daysLeft: travel.days
 });
 initArmyRoute(gameState.armies[gameState.armies.length - 1]);
 
-addLog(`${origin.name}より ${commander.name} 隊（${sendTroops}兵）が出撃！`, 'phase');
+addLog(`${origin.name}より ${commander.name} 隊（${sendTroops}兵）が出撃！${targetTile ? `目標はマス (${targetTile.q}, ${targetTile.r})。` : ''}`, 'phase');
 closeModal();
 // v7: 指揮官本人が出る場合はフェイズ終了。城主が他人を派遣した場合は戦略フェイズを続行できる
 if (mode === 'independent' || (commandPayer && commander.id === commandPayer.id)) {

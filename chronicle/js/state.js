@@ -13,6 +13,7 @@ let gameState = {
     endlessMode: false,
     mapGrid: [],
     territory: [],
+    forts: [], // v9 stage F: 支砦 [{id, q, r, factionId, homeCastleId, garrison}]
     castles: [],
     officers: [],
     armies: [],
@@ -113,6 +114,7 @@ endlessMode: gameState.endlessMode,
 castles: gameState.castles,
 officers: gameState.officers,
 armies: gameState.armies,
+forts: gameState.forts || [],
 terrainIds: gameState.mapGrid.map(row => row.map(c => c.terrain.id)),
 territoryIds: gameState.territory,
 developmentIds: gameState.development,
@@ -153,6 +155,7 @@ gameState.endlessMode = data.endlessMode;
 gameState.castles = data.castles;
 gameState.officers = data.officers;
 gameState.armies = data.armies || [];
+gameState.forts = Array.isArray(data.forts) ? data.forts : []; // v9 stage F: 旧セーブでは支砦なしで開始
 gameState.mapGrid = restoredGrid;
 gameState.territory = (Array.isArray(data.territoryIds) && data.territoryIds.length === MAP_ROWS) ? data.territoryIds : null;
 if (!gameState.territory) initTerritory();
@@ -242,7 +245,8 @@ function initGame(mapSize) {
 gameState.mapGrid[c.r][c.q].terrain = TERRAIN.PLAIN;
 c.lastNpcAttackDay = -999;
 });
-    initTerritory(); // v7: 初期領地（各城のマス＋周囲1マス）
+    gameState.forts = []; // v9 stage F: 支砦はゲーム開始時はなし
+    initTerritory(); // v7: 初期領地 / v9 stage F: 城のアンカー（半径3）で決まる
 
     const player = {
         id: 'h1',

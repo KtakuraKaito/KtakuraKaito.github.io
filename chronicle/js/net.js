@@ -51,6 +51,7 @@ function netSnapshot() {
         castles: gameState.castles,
         officers: gameState.officers,
         armies: gameState.armies,
+        forts: gameState.forts || [], // v9 stage F: 支砦
         terrainIds: gameState.mapGrid.map(row => row.map(c => c.terrain.id)),
         territoryIds: gameState.territory,
         developmentIds: gameState.development,
@@ -108,6 +109,7 @@ function netApplySnapshot(d) {
     gameState.castles = d.castles;
     gameState.officers = d.officers;
     gameState.armies = d.armies || [];
+    gameState.forts = Array.isArray(d.forts) ? d.forts : []; // v9 stage F: 支砦
     gameState.mapGrid = (d.terrainIds || []).map((row, r) => row.map((tid, q) => ({ q, r, terrain: terrainById[tid] || TERRAIN.PLAIN })));
     gameState.territory = (Array.isArray(d.territoryIds) && d.territoryIds.length) ? d.territoryIds : gameState.territory;
     gameState.development = (Array.isArray(d.developmentIds) && d.developmentIds.length) ? d.developmentIds : gameState.development;
@@ -214,17 +216,34 @@ function netHandleGuestData(officerId, msg) {
                 saveGame(); netSync(); updateUI(); drawMap();
             }
         }
+    } else if (msg.type === 'fort') {
+        // v9 stage F: 支砦建設は自城の城主本人のみ。座標は整数に直してから検証する（開発と同じ防御）
+        const sender = gameState.officers.find(o => o.id === officerId);
+        const q = Number(msg.q), r = Number(msg.r);
+        if (sender && Number.isInteger(q) && Number.isInteger(r) && canBuildFort(sender, q, r)) {
+            const castle = gameState.castles.find(c => c.id === sender.castleId);
+            const cost = castle ? fortBuildCost(castle) : 0;
+            if (castle && castle.treasury >= cost && getCastleTroops(castle.id) >= FORT_GARRISON && spendCommand(sender, COMMAND_COSTS.fort)) {
+                castle.treasury -= cost;
+                buildFortAt(castle, q, r);
+                addLog(`${castle.name}の支砦を (${q}, ${r}) に建設しました（守備 ${FORT_GARRISON} 兵）。`, 'good');
+                saveGame(); netSync(); updateUI(); drawMap();
+            }
+        }
     } else if (msg.type === 'order') {
         // v7: ゲストからの部隊指示（指揮官本人か、出撃元の城主のみ許可）
         const army = gameState.armies.find(a => a.id === msg.armyId);
         const sender = gameState.officers.find(o => o.id === officerId);
-        if (army && sender && canOrderArmy(army, sender) && (msg.kind === 'WAIT' || msg.kind === 'RETURN' || msg.kind === 'ADVANCE')) {
-            if (setArmyOrder(army, msg.kind, msg.targetCastleId)) { saveGame(); netSync(); }
+        if (army && sender && canOrderArmy(army, sender) && (msg.kind === 'WAIT' || msg.kind === 'RETURN' || msg.kind === 'ADVANCE' || msg.kind === 'TILE')) {
+            const tile = (msg.kind === 'TILE' && Number.isInteger(Number(msg.targetQ)) && Number.isInteger(Number(msg.targetR))) ? { q: Number(msg.targetQ), r: Number(msg.targetR) } : null;
+            if (msg.kind !== 'TILE' || tile) {
+                if (setArmyOrder(army, msg.kind, msg.targetCastleId, tile)) { saveGame(); netSync(); }
+            }
         }
     } else if (msg.type === 'action') {
         if (!NET_ACTION_WHITELIST.includes(msg.name)) return;
         if (gameState.activeOfficerId !== officerId) return;
-        const args = Array.isArray(msg.args) ? msg.args.slice(0, 6) : []; // v9 review fix: 6番目の引数（部隊方針）まで通す
+        const args = Array.isArray(msg.args) ? msg.args.slice(0, 8) : []; // v9 review fix: 6番目の引数（部隊方針）まで通す / stage F: 8番目（マス目標の座標）まで通す
         if (args.some(a => a !== null && typeof a === 'object')) return;
         const need = NET_ACTION_PHASE[msg.name];
         if (need && gameState.activePhase !== need) return;
@@ -236,6 +255,8 @@ function netHandleGuestData(officerId, msg) {
         }
         if (msg.name === 'actionLaunchAttack' && args.length > 4 && args[4] !== null && typeof args[4] !== 'number') return;
         if (msg.name === 'actionLaunchAttack' && args.length > 5 && args[5] !== null && typeof args[5] !== 'string') return; // v9: 方針は文字列か null のみ
+        if (msg.name === 'actionLaunchAttack' && args.length > 6 && args[6] !== null && typeof args[6] !== 'number') return; // v9 stage F: マス目標の座標は数値か null のみ
+        if (msg.name === 'actionLaunchAttack' && args.length > 7 && args[7] !== null && typeof args[7] !== 'number') return;
         const fn = window[msg.name];
         if (typeof fn === 'function') {
             try { fn(...args); } catch (e) { addLog('オンライン参加者の操作でエラーが発生しました。', 'warn'); }

@@ -109,7 +109,10 @@ if (q === tq && r === tr) break;
 for (const n of hexNeighbors(q, r)) {
 // v7 review fix: castle tiles other than start/target are impassable (no routing through enemy castles)
 if (!(n.q === tq && n.r === tr) && gameState.castles.some(c => c.q === n.q && c.r === n.r)) continue;
-const nd = d + tileEnterCost(n.q, n.r, factionId);
+let stepCost = tileEnterCost(n.q, n.r, factionId);
+// v9 stage F: 敵支砦のマスは経路コストを重くして迂回を促す（目標マスそのものは除く。踏めば支砦戦になる）
+if (!(n.q === tq && n.r === tr) && factionId) { const ef = fortAt(n.q, n.r); if (ef && ef.factionId !== factionId) stepCost += 4; }
+const nd = d + stepCost;
 const k = key(n.q, n.r);
 if (nd < (dist.has(k) ? dist.get(k) : Infinity)) {
 dist.set(k, nd);
@@ -181,16 +184,18 @@ return days;
 
 // v7: 部隊に現在マスと経路を持たせる
 function initArmyRoute(army) {
-const target = gameState.castles.find(c => c.id === army.targetCastleId);
+const target = (army.targetCastleId !== null && army.targetCastleId !== undefined) ? gameState.castles.find(c => c.id === army.targetCastleId) : null;
 const commander = gameState.officers.find(o => o.id === army.commanderId);
 // v7 review fix: legacy armies without an origin fall back to the commander's castle, then the target (never (0,0))
 const origin = gameState.castles.find(c => c.id === army.originCastleId)
 || (commander && commander.castleId !== null && commander.castleId !== undefined ? gameState.castles.find(c => c.id === commander.castleId) : null)
 || target;
+// v9 stage F: 目標は城かマス（targetTile）のどちらか
+const dest = target ? { q: target.q, r: target.r } : (army.targetTile ? { q: army.targetTile.q, r: army.targetTile.r } : null);
 army.posQ = origin ? origin.q : 0;
 army.posR = origin ? origin.r : 0;
 if (!army.order) army.order = 'ADVANCE';
-army.path = (origin && target) ? findPath(origin.q, origin.r, target.q, target.r, army.factionId) : [];
+army.path = (origin && dest) ? findPath(origin.q, origin.r, dest.q, dest.r, army.factionId) : [];
 const est = estimateDaysForPath(army.path, commander, army.factionId, army.forcedUntil || 0);
 army.totalDays = Math.max(1, est);
 army.daysLeft = army.totalDays;
@@ -214,11 +219,43 @@ const row = [];
 for (let q = 0; q < MAP_COLS; q++) row.push(0);
 gameState.territory.push(row);
 }
-// v7 review fix: castle tiles first, then rings claim only unclaimed tiles (processing order must not steal a neighbour castle's ring)
-gameState.castles.forEach(castle => setTerritory(castle.q, castle.r, castle.factionId));
-gameState.castles.forEach(castle => {
-hexNeighbors(castle.q, castle.r).forEach(n => { if (getTerritory(n.q, n.r) === 0) setTerritory(n.q, n.r, castle.factionId); });
-});
+recomputeTerritory();
+}
+
+// v9 stage F: そのマスにある支砦（なければ null）
+function fortAt(q, r) {
+if (!Array.isArray(gameState.forts)) return null;
+return gameState.forts.find(f => f.q === q && f.r === r) || null;
+}
+
+// v9 stage F: 領地のアンカー再計算。各マスの色は最も近いアンカー（城=半径 CASTLE_TERRITORY_RADIUS、支砦=半径 FORT_RADIUS）の勢力。
+// 届くアンカーがなければ中立。同距離なら城が優先し、それも同じなら先に登録されたアンカーが優先（決定的にするため）。
+// 色が変わったマスの開発施設は失われる（v8 のルールを踏襲）。
+function recomputeTerritory() {
+if (!gameState.mapGrid || gameState.mapGrid.length === 0) return;
+if (!Array.isArray(gameState.territory) || gameState.territory.length !== MAP_ROWS) {
+gameState.territory = [];
+for (let r = 0; r < MAP_ROWS; r++) { const row = []; for (let q = 0; q < MAP_COLS; q++) row.push(0); gameState.territory.push(row); }
+}
+const anchors = [];
+gameState.castles.forEach(c => anchors.push({ q: c.q, r: c.r, factionId: c.factionId, radius: CASTLE_TERRITORY_RADIUS, isCastle: true }));
+(gameState.forts || []).forEach(f => anchors.push({ q: f.q, r: f.r, factionId: f.factionId, radius: FORT_RADIUS, isCastle: false }));
+for (let r = 0; r < MAP_ROWS; r++) {
+if (!Array.isArray(gameState.territory[r]) || gameState.territory[r].length !== MAP_COLS) { const fixedRow = []; for (let q = 0; q < MAP_COLS; q++) fixedRow.push(0); gameState.territory[r] = fixedRow; } // Copilot指摘: 欠落行への書き込み例外を防ぐ
+for (let q = 0; q < MAP_COLS; q++) {
+let best = null;
+for (const a of anchors) {
+const d = calcDistance(q, r, a.q, a.r);
+if (d > a.radius) continue;
+if (!best || d < best.d || (d === best.d && a.isCastle && !best.isCastle)) best = { d, factionId: a.factionId, isCastle: a.isCastle };
+}
+const owner = best ? best.factionId : 0;
+if (gameState.territory[r][q] !== owner) {
+if (gameState.territory[r][q] !== 0) setDevelopment(q, r, 0); // 持ち主がいたマスの色が変わったら施設は失われる
+gameState.territory[r][q] = owner;
+}
+}
+}
 }
 
 function countTerritory(factionId) {
@@ -238,17 +275,8 @@ return owner !== 0 && owner !== castle.factionId;
 });
 }
 
-// v7: 1日の終わりに部隊が止まっているマスをその勢力の領地にする（兵力300以上、城マスは除く）
-function processTerritoryClaims() {
-gameState.armies.forEach(army => {
-if (army.type !== 'ATTACK') return;
-if (army.order === 'RETURN') return; // v7 review fix: returning armies do not claim territory
-if ((army.troops || 0) < 300) return;
-if (typeof army.posQ !== 'number') return;
-if (gameState.castles.some(c => c.q === army.posQ && c.r === army.posR)) return;
-setTerritory(army.posQ, army.posR, army.factionId);
-});
-}
+// v9 stage F: 旧 processTerritoryClaims（部隊が止まったマスを領地化）は廃止。
+// 領地は城と支砦のアンカーだけで決まる（recomputeTerritory）。互換のため空関数は残さない。
 
 // v6: 野戦（会敵）。敵対する攻撃部隊同士がフィールド上で接近したら戦闘する
 function armyFieldPos(army, daysLeftOverride) {
@@ -290,6 +318,16 @@ function processArmiesMovement() {
             army.posR = next.r;
             army.path.shift();
             moved = true;
+            // v9 stage F: 敵支砦のマスに入ったら、その場で支砦戦（帰還中の部隊は戦わない）。勝敗どちらの場合もその日の行軍はここまで
+            if (army.type === 'ATTACK' && army.order !== 'RETURN') {
+                const fortHere = fortAt(army.posQ, army.posR);
+                if (fortHere && fortHere.factionId !== army.factionId) {
+                    resolveFortBattle(army, fortHere);
+                    foughtToday = true;
+                    if (!gameState.armies.includes(army)) { destroyed = true; }
+                    break;
+                }
+            }
             // v7 review fix: 移動の途中で敵部隊と近接したら、その場で野戦（城前の迎撃や行き違いの会敵が成立する）
             if (army.type === 'ATTACK' && army.order !== 'RETURN' && army._foughtDay !== gameState.day) {
                 const foe = gameState.armies.find(a => a !== army && a.type === 'ATTACK' && a.order !== 'RETURN' && a.factionId !== army.factionId && a._foughtDay !== gameState.day && typeof a.posQ === 'number' && calcDistance(army.posQ, army.posR, a.posQ, a.posR) <= 1);
@@ -311,6 +349,9 @@ function processArmiesMovement() {
             arriveArmy(army);
             const ai = gameState.armies.indexOf(army);
             if (ai >= 0) gameState.armies.splice(ai, 1);
+        } else if (army.type === 'ATTACK' && !army.targetCastleId && army.targetTile && army.path.length === 0 && army.posQ === army.targetTile.q && army.posR === army.targetTile.r && army.order !== 'WAIT') {
+            // v9 stage F: マス目標に到着したら、そのマスで待機して前線の足場にする（部隊は残る）
+            arriveTileArmy(army);
         }
     }
 }
@@ -348,5 +389,16 @@ function arriveArmy(army) {
         }
     } else if (army.type === 'ATTACK') {
         resolveSiegeBattle(army, targetCastle, commander);
+    }
+}
+
+// v9 stage F: マス目標への到着（部隊は消えず、そのマスで待機に入る）
+function arriveTileArmy(army) {
+    const commander = gameState.officers.find(o => o.id === army.commanderId);
+    army.order = 'WAIT';
+    army.daysLeft = 0;
+    addLog(`${commander ? commander.name : '部隊'} 隊が目標のマス (${army.posQ}, ${army.posR}) に到着し、布陣しました。`, 'info');
+    if (commander && isHuman(commander)) {
+        showEventNotice('マスに到着', `${commander.name} 隊が (${army.posQ}, ${army.posR}) に到着し、待機に入りました。`, 'good', {});
     }
 }

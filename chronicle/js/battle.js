@@ -8,6 +8,19 @@ function getSiegeBuff(castle) {
     return Math.max(0.9, buff); // v9: 下限0.9（低経済＋包囲で落ちやすさが極端にならないように）
 }
 
+// v9 stage F: 領地バフ。そのマスが自勢力の色なら戦力 +10%（野戦・支砦戦・攻城戦の守備に適用）
+function territoryBuffAt(factionId, q, r) {
+    if (!factionId || typeof q !== 'number' || typeof r !== 'number') return 1;
+    return getTerritory(q, r) === factionId ? TERRITORY_BUFF : 1;
+}
+
+// v9 stage F: 支砦の援護バフ。本拠の城の支砦が1つ残るごとに、その城の攻城守備 +8%
+function fortSupportRate(castle) {
+    if (!castle) return 1;
+    const n = (gameState.forts || []).filter(f => f.homeCastleId === castle.id && f.factionId === castle.factionId).length;
+    return 1 + FORT_SUPPORT_RATE * n;
+}
+
 // v9: 兵科の三すくみ（野戦のみ。有利な側が+10%）
 function troopMatchupModifier(me, enemy) {
     if (!me || !enemy) return 1;
@@ -47,7 +60,7 @@ function troopTypeModifier(officer, terrain, context) {
 function getEffectiveDefense(castle) {
     const lord = getCastleLord(castle.id);
     const defValor = lord ? lord.valor : 55;
-    let eff = (getCastleTroops(castle.id) + 100) * (1 + defValor / 100) * getSiegeBuff(castle) * castleDefenseFactor(castle); // v9: 要塞補正
+    let eff = (getCastleTroops(castle.id) + 100) * (1 + defValor / 100) * getSiegeBuff(castle) * castleDefenseFactor(castle) * territoryBuffAt(castle.factionId, castle.q, castle.r) * fortSupportRate(castle); // v9: 要塞補正 / stage F: 領地バフと支砦援護も実効守備力に含める
     if (lord && lord.trait === 'ironwall') eff *= 1.15;
     if (lord) eff *= troopTypeModifier(lord, null, 'siege-defense'); // v8: 歩兵の城主は守備 +10%
     return Math.round(eff);
@@ -305,7 +318,7 @@ showModal(
 }
 
 castle.factionId = newFactionId;
-setTerritory(castle.q, castle.r, newFactionId); // v7: 反乱でも城マスの領地が移る
+recomputeTerritory(); // v9 stage F: 反乱でもアンカーの勢力が変わり、領地が決め直される（旧勢力の支砦は旧勢力のまま残る）
  leader.merit = oldLordMerit + 50;
 leader.loyalty = 100;
 leader.rebellionWarned = false;
@@ -347,6 +360,8 @@ function resolveFieldBattle(armyA, armyB) {
         if (cmd) p *= troopTypeModifier(cmd, battleTerrain, 'field'); // v8: 兵科と地形の相性
         if (cmd) p *= troopMatchupModifier(cmd, enemyCmd); // v9: 兵科の三すくみ
         p *= stanceOf(army).dealt; // v9: 部隊方針（与える損害）
+        const myPos = armyFieldPos(army); // v9 stage F: 自分のいるマスが自領地なら +10%
+        if (myPos) p *= territoryBuffAt(army.factionId, myPos.q, myPos.r);
         return p;
     };
     const pA = powerOf(armyA, cmdA, cmdB), pB = powerOf(armyB, cmdB, cmdA);
@@ -382,6 +397,69 @@ function resolveFieldBattle(armyA, armyB) {
     }
 }
 
+// v9 stage F: 支砦戦。敵支砦のマスに入った部隊がその場で戦う。守備力 = 守備兵力 × 要塞化ボーナス × 領地バフ。
+// 勝てば支砦は攻略側の物になり（守備300を部隊から置く）、本拠の上限に達している場合などは焼き払う。
+// 負ければ部隊は攻城失敗と同じ扱いで壊滅し、残存兵は供出者へ返る。
+function resolveFortBattle(army, fort) {
+    if (!army || !fort || fort.factionId === army.factionId) return false; // Copilot指摘: 同勢力の支砦では戦闘しない（呼び出し側でも除外済み）
+    const commander = gameState.officers.find(o => o.id === army.commanderId);
+    const cell = gameState.mapGrid[fort.r] && gameState.mapGrid[fort.r][fort.q];
+    const terrain = cell ? cell.terrain : TERRAIN.PLAIN;
+    const atkFactionName = FACTIONS[army.factionId]?.name || '攻撃軍';
+    const defFactionName = FACTIONS[fort.factionId]?.name || '守備軍';
+
+    let atkPower = army.troops * (1 + (commander ? commander.valor : 60) / 100) * (0.9 + Math.random() * 0.25);
+    if (commander && commander.trait === 'brave') atkPower *= 1.15;
+    if (commander) atkPower *= troopTypeModifier(commander, terrain, 'field');
+    atkPower *= stanceOf(army).dealt;
+    atkPower *= territoryBuffAt(army.factionId, fort.q, fort.r);
+    const defPower = Math.max(1, fort.garrison * FORT_DEFENSE_MULT * (0.95 + Math.random() * 0.2) * territoryBuffAt(fort.factionId, fort.q, fort.r));
+
+    if (atkPower > defPower) {
+        army.troops = Math.max(150, Math.floor(army.troops * (1 - (defPower / (atkPower * 1.4)) * stanceOf(army).dealt * stanceOf(army).taken)));
+        army._foughtDay = gameState.day;
+        if (commander) {
+            commander.merit += meritGainFor(commander, 40);
+            gainOfficerExp(commander, 'valor', 25);
+            gainOfficerExp(commander, 'leadership', 15);
+        }
+        const ownAtOrigin = (gameState.forts || []).filter(f => f.homeCastleId === army.originCastleId && f.factionId === army.factionId).length;
+        if (army.troops > FORT_CAPTURE_GARRISON && ownAtOrigin < FORT_MAX_PER_CASTLE) {
+            army.troops -= FORT_CAPTURE_GARRISON;
+            fort.factionId = army.factionId;
+            fort.homeCastleId = army.originCastleId;
+            fort.garrison = FORT_CAPTURE_GARRISON;
+            addLog(`${atkFactionName}の ${commander ? commander.name : '部隊'} 隊が (${fort.q}, ${fort.r}) の支砦を攻略！周辺の領地が ${atkFactionName} の色に変わりました。`, 'warn');
+            if (commander && isHuman(commander)) showEventNotice('支砦を攻略', `${commander.name} 隊が支砦を攻略しました。周辺の領地が自勢力の色に変わります。`, 'good', {});
+        } else {
+            const fi = gameState.forts.indexOf(fort);
+            if (fi >= 0) gameState.forts.splice(fi, 1);
+            addLog(`${atkFactionName}の ${commander ? commander.name : '部隊'} 隊が (${fort.q}, ${fort.r}) の支砦を焼き払いました。周辺の領地は最寄りの城・支砦の色に戻ります。`, 'warn');
+            if (commander && isHuman(commander)) showEventNotice('支砦を焼き払い', `${commander.name} 隊が支砦を制圧し、焼き払いました。`, 'good', {});
+        }
+        recomputeTerritory();
+        return { won: true };
+    }
+
+    // 守備側の損害（比率で残る。下限あり）
+    fort.garrison = Math.max(80, Math.floor(fort.garrison * Math.max(0.3, 1 - atkPower / (defPower * 1.6))));
+    const survivors = Math.floor(army.troops * 0.35 * (2 - stanceOf(army).taken));
+    distributeArmyRemainder(army, survivors);
+    if (commander) {
+        commander.isMoving = false;
+        const originCastle = gameState.castles.find(c => c.id === army.originCastleId);
+        commander.castleId = (originCastle && originCastle.factionId === army.factionId) ? originCastle.id : null;
+        if (commander.castleId === null) addLog(`${commander.name}の帰還先 ${originCastle ? originCastle.name : '城'} は既に陥落しており、浪人となりました。`, 'warn');
+        commander.merit += meritGainFor(commander, 20);
+        if (isHuman(commander)) showEventNotice('支砦攻略に失敗', `${commander.name} 隊は ${defFactionName} の支砦（守備 ${fort.garrison} 兵）に退けられました。`, 'danger', {});
+    }
+    const ai = gameState.armies.indexOf(army);
+    if (ai >= 0) gameState.armies.splice(ai, 1);
+    addLog(`${atkFactionName}の ${commander ? commander.name : '部隊'} 隊が (${fort.q}, ${fort.r}) の支砦に退けられました（支砦の守備は ${fort.garrison} 兵に減少）。`, 'info');
+    syncCastleLords();
+    return { won: false };
+}
+
 function resolveSiegeBattle(army, targetCastle, commander) {
 if (!targetCastle) return;
 
@@ -407,7 +485,7 @@ if (commander) atkPower *= troopTypeModifier(commander, null, 'siege-attack'); /
 atkPower *= stanceOf(army).dealt; // v9: 部隊方針（与える損害）
 if (typeof getSeason === 'function' && getSeason(gameState.day).id === 'winter') atkPower *= 0.9; // v9: 冬の攻城は1割不利
 if (army.supplyReady) { atkPower *= 1.1; army.supplyReady = false; } // v9 stage E: 兵站整備（1回限り）
-let defPower = (defTroops + 100) * (1 + defValor / 100) * (0.95 + Math.random() * 0.2) * getSiegeBuff(targetCastle) * castleDefenseFactor(targetCastle); // v9: 要塞補正
+let defPower = (defTroops + 100) * (1 + defValor / 100) * (0.95 + Math.random() * 0.2) * getSiegeBuff(targetCastle) * castleDefenseFactor(targetCastle) * territoryBuffAt(targetCastle.factionId, targetCastle.q, targetCastle.r) * fortSupportRate(targetCastle); // v9: 要塞補正 / stage F: 領地バフ（城マスは守備側の色）と支砦援護で二重に効く
 if (defLord && defLord.trait === 'ironwall') defPower *= 1.15;
 if (defLord) defPower *= troopTypeModifier(defLord, null, 'siege-defense'); // v8: 歩兵の守備 +10%
 
@@ -417,7 +495,7 @@ const playerInvolved = (commander && isHuman(commander)) || defenders.some(d => 
 if (atkPower > defPower) {
 const remainingTroops = Math.max(150, Math.floor(army.troops * (1 - (defPower / (atkPower * 1.4)) * stanceOf(army).dealt * stanceOf(army).taken))); // v9 review fix: 攻城の損害も dealt と taken の積で効かせる
 targetCastle.factionId = army.factionId;
-setTerritory(targetCastle.q, targetCastle.r, army.factionId); // v7: 落城した城マスも領地が移る
+recomputeTerritory(); // v9 stage F: 落城でアンカーの勢力が変わり、周辺の色も決め直される
 
 // 防御側の私兵は比率で損害を受け、生き残りは城を追われて浪人になる
 defenders.forEach(d => {

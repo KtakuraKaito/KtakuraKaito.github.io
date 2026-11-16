@@ -84,7 +84,8 @@ function openArmiesModal() {
         if (army.type === 'ATTACK' && !locked && typeof canForceMarch === 'function' && canForceMarch(army, viewer)) {
             forcedBtn = `<div class="mt-1.5"><button data-forced="${army.id}" class="btn-action px-2 py-1 rounded bg-teal-700 text-white text-[11px] font-bold">強行軍 (指導力${COMMAND_COSTS.forcedMarch} / 移動力+2・3日間)</button></div>`;
         }
-        return `<div class="bg-slate-900/70 border border-slate-800 rounded px-3 py-1.5 text-xs"><div class="flex items-center justify-between"><span><span class="font-bold ${army.type === 'ATTACK' ? 'text-rose-300' : 'text-sky-300'}">${kind}</span> <span style="color:${faction ? faction.color : '#e2e8f0'}" class="font-bold">${faction ? faction.name : '不明'}</span> <span class="font-bold text-slate-100">${commander ? commander.name : '不明'} 隊</span> <span class="text-slate-500">${stats}</span> <span class="text-slate-400">${origin ? origin.name : '?'} → ${target ? target.name : '?'}${orderText}</span></span><span class="font-bold text-amber-300">${troops} 兵 / ${remainText}</span></div>${orderBtns}${forcedBtn}</div>`;
+        const targetLabel = target ? target.name : (army.targetTile ? `マス(${army.targetTile.q}, ${army.targetTile.r})` : '?'); // v9 stage F: マス目標の表示
+        return `<div class="bg-slate-900/70 border border-slate-800 rounded px-3 py-1.5 text-xs"><div class="flex items-center justify-between"><span><span class="font-bold ${army.type === 'ATTACK' ? 'text-rose-300' : 'text-sky-300'}">${kind}</span> <span style="color:${faction ? faction.color : '#e2e8f0'}" class="font-bold">${faction ? faction.name : '不明'}</span> <span class="font-bold text-slate-100">${commander ? commander.name : '不明'} 隊</span> <span class="text-slate-500">${stats}</span> <span class="text-slate-400">${origin ? origin.name : '?'} → ${targetLabel}${orderText}</span></span><span class="font-bold text-amber-300">${troops} 兵 / ${remainText}</span></div>${orderBtns}${forcedBtn}</div>`;
     }).join('');
     const html = rows ? `<div class="space-y-2 max-h-[60vh] overflow-y-auto pr-1">${rows}</div>` : '<p class="text-slate-400 text-sm">現在、出陣中・移動中の部隊はありません。</p>';
     showModal('出陣中・移動中の部隊', html, [{ text: '閉じる', class: 'bg-slate-700 text-slate-200', onClick: closeModal }]);
@@ -94,7 +95,7 @@ function openArmiesModal() {
             const kind = btn.getAttribute('data-order');
             if (kind === 'target') { openArmyTargetModal(armyId); return; }
             if (kind === 'wait') actionArmyOrder(armyId, 'WAIT', null);
-            else if (kind === 'resume') { const a = gameState.armies.find(x => x.id === armyId); actionArmyOrder(armyId, 'ADVANCE', a ? a.targetCastleId : null); }
+            else if (kind === 'resume') { const a = gameState.armies.find(x => x.id === armyId); if (a && !a.targetCastleId && a.targetTile) actionArmyOrder(armyId, 'TILE', null, a.targetTile); else actionArmyOrder(armyId, 'ADVANCE', a ? a.targetCastleId : null); }
             else if (kind === 'return') actionArmyOrder(armyId, 'RETURN', null);
             closeModal();
         };
@@ -108,11 +109,19 @@ function openArmiesModal() {
 }
 
 // v7: 部隊の目標変更先を選ぶモーダル
+// v9 stage F: マス目標（選択中のマス／マップで選ぶ）にも対応
 function openArmyTargetModal(armyId) {
     const army = gameState.armies.find(a => a.id === armyId);
     if (!army) return;
     const commander = gameState.officers.find(o => o.id === army.commanderId);
-    let html = `<p class="text-xs text-slate-400 mb-2">${commander ? commander.name : '部隊'} 隊の新しい目標を選んでください。自勢力の城へは部隊を移駐できます。出発した城へ戻る場合は「帰還」を使ってください。</p><div class="space-y-2">`;
+    let html = `<p class="text-xs text-slate-400 mb-2">${commander ? commander.name : '部隊'} 隊の新しい目標を選んでください。自勢力の城へは部隊を移駐できます。出発した城へ戻る場合は「帰還」を使ってください。任意のマスを目標にすると、到着後にそのマスで待機します。</p>`;
+    html += `<div class="flex gap-2 mb-2"><button id="army-pick-btn" class="btn-action px-3 py-1.5 rounded bg-slate-600 text-white text-xs font-bold">マップで選ぶ（城・マス）</button>`;
+    const sel = gameState.selectedTile;
+    if (sel && !gameState.castles.some(c => c.q === sel.q && c.r === sel.r)) {
+        const d = (typeof army.posQ === 'number') ? calcDistance(army.posQ, army.posR, sel.q, sel.r) : 0;
+        html += `<button id="army-tile-btn" class="btn-action px-3 py-1.5 rounded bg-indigo-700 text-white text-xs font-bold">選択中のマス (${sel.q}, ${sel.r}) へ（現在地から ${d} マス）</button>`;
+    }
+    html += `</div><div class="space-y-2">`;
     gameState.castles.filter(c => c.id !== army.originCastleId && c.id !== army.targetCastleId).forEach(c => {
         const f = FACTIONS[c.factionId];
         const d = (typeof army.posQ === 'number') ? calcDistance(army.posQ, army.posR, c.q, c.r) : 0;
@@ -126,6 +135,19 @@ function openArmyTargetModal(armyId) {
             closeModal();
         };
     });
+    const tileBtn = document.getElementById('army-tile-btn');
+    if (tileBtn && sel) tileBtn.onclick = () => { actionArmyOrder(armyId, 'TILE', null, { q: sel.q, r: sel.r }); closeModal(); };
+    const pickBtn = document.getElementById('army-pick-btn');
+    if (pickBtn) pickBtn.onclick = () => {
+        closeModal();
+        startMapPick(['castle', 'tile'], (pick) => {
+            if (pick.type === 'castle') {
+                if (pick.castle.id !== army.originCastleId) actionArmyOrder(armyId, 'ADVANCE', pick.castle.id);
+            } else {
+                actionArmyOrder(armyId, 'TILE', null, { q: pick.q, r: pick.r });
+            }
+        }, '部隊の新しい目標を選んでください（城か、マスをクリック）');
+    };
 }
 
 function openStandingsModal() {
@@ -508,16 +530,30 @@ function renderSelectedTile() {
     const viewerCastle = viewer ? gameState.castles.find(c => c.id === viewer.castleId) : null;
     html += `<div>移動コスト: ${tileEnterCost(t.q, t.r, viewerCastle ? viewerCastle.factionId : 0)}（あなたの勢力の部隊が入る場合）</div>`;
     html += `<div>開発: ${dev === 1 ? '🌾 農地（領地収入 +1G/月）' : (dev === 2 ? '🏯 関所（敵部隊の進入コスト +2）' : 'なし')}</div>`;
+    const fort = (typeof fortAt === 'function') ? fortAt(t.q, t.r) : null; // v9 stage F: 支砦の表示
+    if (fort) {
+        const ff = FACTIONS[fort.factionId];
+        const home = gameState.castles.find(c => c.id === fort.homeCastleId);
+        html += `<div>支砦: <span style="color:${ff ? ff.color : '#e2e8f0'}" class="font-bold">${ff ? ff.name : '不明'}</span>（本拠: ${home ? home.name : '?'}）守備 ${fort.garrison} 兵 ＝ 実効 ${Math.round(fort.garrison * FORT_DEFENSE_MULT * (getTerritory(t.q, t.r) === fort.factionId ? TERRITORY_BUFF : 1))} 相当</div>`;
+    }
     html += `</div>`;
     if (dev === 0 && viewer && canDevelopTile(viewer, t.q, t.r)) {
         html += `<div class="mt-3 flex gap-2"><button id="btn-develop-farm" class="btn-action px-3 py-1.5 rounded bg-amber-700 text-white text-xs font-bold">🌾 農地を開発 (200G / 指導力${COMMAND_COSTS.develop})</button><button id="btn-develop-gate" class="btn-action px-3 py-1.5 rounded bg-slate-600 text-white text-xs font-bold">🏯 関所を設置 (300G / 指導力${COMMAND_COSTS.develop})</button></div>`;
         html += `<div class="text-[11px] text-slate-500 mt-1">費用は自分の城の共有資金から。領地が他勢力に移ると施設は失われます。</div>`;
+    }
+    if (!fort && viewer && typeof canBuildFort === 'function' && canBuildFort(viewer, t.q, t.r)) {
+        const vCastle = gameState.castles.find(c => c.id === viewer.castleId);
+        const cost = vCastle ? fortBuildCost(vCastle) : 0;
+        html += `<div class="mt-3"><button id="btn-build-fort" class="btn-action px-3 py-1.5 rounded bg-amber-700 text-white text-xs font-bold">支砦を建設 (${cost}G / 指導力${COMMAND_COSTS.fort})</button></div>`;
+        html += `<div class="text-[11px] text-slate-500 mt-1">城の駐留兵から守備 ${FORT_GARRISON} 兵を割きます。支砦は半径 ${FORT_RADIUS} マスを自勢力の領地に固め、本拠の城の守備に援護 +${Math.round(FORT_SUPPORT_RATE * 100)}% を与えます。</div>`;
     }
     detailBox.innerHTML = html;
     const bf = document.getElementById('btn-develop-farm');
     if (bf) bf.onclick = () => actionDevelopTile(t.q, t.r, 1);
     const bg = document.getElementById('btn-develop-gate');
     if (bg) bg.onclick = () => actionDevelopTile(t.q, t.r, 2);
+    const bb = document.getElementById('btn-build-fort');
+    if (bb) bb.onclick = () => actionBuildFort(t.q, t.r);
 }
 
 function showModal(title, bodyHtml, buttons) {
@@ -589,7 +625,7 @@ function openRelocateModal() {
         return;
     }
 
-    let html = `<p class="text-xs text-slate-400 mb-2">移動先の城を選択してください。</p><div class="space-y-2">`;
+    let html = `<p class="text-xs text-slate-400 mb-2">移動先の城を選択してください。</p><div class="mb-2"><button id="relocate-pick-btn" class="btn-action px-3 py-1.5 rounded bg-slate-600 text-white text-xs font-bold">マップで選ぶ（自勢力の城）</button></div><div class="space-y-2">`;
     allies.forEach(c => {
         const dist = calcDistance(origin.q, origin.r, c.q, c.r);
  const travelDaysRel = calcTravelInfo(origin, c, player).days;
@@ -607,10 +643,18 @@ function openRelocateModal() {
     });
     html += `</div>`;
     showModal('転属・移動先の選択', html, [{ text: 'キャンセル', class: 'bg-slate-700 text-slate-200', onClick: closeModal }]);
+    const relPickBtn = document.getElementById('relocate-pick-btn');
+    if (relPickBtn) relPickBtn.onclick = () => {
+        closeModal();
+        startMapPick(['castle'], (pick) => {
+            if (pick.castle.factionId === origin.factionId && pick.castle.id !== origin.id) actionRelocate(pick.castle.id);
+            else { showEventNotice('移動できません', '自勢力の他の城を選んでください。', 'warn', {}); openRelocateModal(); }
+        }, '移動先の城を選んでください（自勢力の城をクリック）');
+    };
 }
 
 function openSabotageModal() {
-    let html = `<p class="text-xs text-slate-400 mb-2">私財 <strong>120G</strong> を使って他城の配下の不満を煽ります。</p><div class="space-y-2">`;
+    let html = `<p class="text-xs text-slate-400 mb-2">私財 <strong>120G</strong> を使って他城の配下の不満を煽ります。</p><div class="mb-2"><button id="sabotage-pick-btn" class="btn-action px-3 py-1.5 rounded bg-slate-600 text-white text-xs font-bold">マップで選ぶ（城）</button></div><div class="space-y-2">`;
     gameState.castles.forEach(c => {
         const members = getCastleOfficers(c.id);
         const fName = FACTIONS[c.factionId].name;
@@ -628,6 +672,11 @@ function openSabotageModal() {
     });
     html += `</div>`;
     showModal('資金工作（不満の扇動）', html, [{ text: 'キャンセル', class: 'bg-slate-700 text-slate-200', onClick: closeModal }]);
+    const sabPickBtn = document.getElementById('sabotage-pick-btn');
+    if (sabPickBtn) sabPickBtn.onclick = () => {
+        closeModal();
+        startMapPick(['castle'], (pick) => { actionBribeSabotage(pick.castle.id); }, '工作の対象の城を選んでください（城をクリック）');
+    };
 }
 
 function openResignModal() {
@@ -644,10 +693,13 @@ function openResignModal() {
 
 let attackModalMode = 'strategy';
 var atkDesiredTotal = null;
+let atkTargetTile = null; // v9 stage F: 出陣モーダルで選んだマス目標（城目標のときは null）
+let indTargetTile = null; // v9 stage F: 独立出陣モーダルのマス目標
 window.onAttackSliderInput = function() { const s = document.getElementById('atk-troops-slider'); if (s) { atkDesiredTotal = parseInt(s.value); updateAttackPreview(); } };
 
-function openAttackModal() {
+function openAttackModal(preset) {
 attackModalMode = 'strategy';
+atkTargetTile = (preset && preset.tile) ? { q: preset.tile.q, r: preset.tile.r } : null;
 const player = getPlayer();
 const myCastle = gameState.castles.find(c => c.id === player.castleId);
 const ruler = isFactionRuler(player);
@@ -657,7 +709,7 @@ const originCastles = ruler
 : [myCastle];
 
 const enemyCastles = gameState.castles.filter(c => c.factionId!== myCastle.factionId);
-if (enemyCastles.length === 0) return;
+if (enemyCastles.length === 0 && !atkTargetTile) return;
 
 let html = `<div class="space-y-3">
 <div>
@@ -667,10 +719,12 @@ ${originCastles.map(c => `<option value="${c.id}">${c.name} (駐留兵力: ${get
 </select>
 </div>
 <div>
-<label class="block text-xs text-slate-400 mb-1">攻撃目標の敵城</label>
+<label class="block text-xs text-slate-400 mb-1">攻撃目標（敵城、または任意のマス）</label>
 <select id="atk-target-select" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs text-white" onchange="atkDesiredTotal=null; updateAttackPreview()">
 ${enemyCastles.map(c => `<option value="${c.id}">${c.name} [${FACTIONS[c.factionId].name}] (守備: ${getCastleTroops(c.id)})</option>`).join('')}
+${atkTargetTile ? `<option value="tile">マス (${atkTargetTile.q}, ${atkTargetTile.r})${fortAt(atkTargetTile.q, atkTargetTile.r) ? ' の支砦' : ''}</option>` : ''}
 </select>
+<button id="atk-pick-btn" class="btn-action mt-1.5 px-3 py-1.5 rounded bg-slate-600 text-white text-xs font-bold">マップで選ぶ（城・マス）</button>
 </div>
 <div>
 <label class="block text-xs text-slate-400 mb-1">出陣指揮官（供出上限: 指揮官は私兵の全て、他の駐留武将は半分）</label>
@@ -699,26 +753,46 @@ text: '出陣を実行する',
 class: 'bg-rose-600 text-white font-bold',
 onClick: () => {
 const oId = parseInt(document.getElementById('atk-origin-select').value);
-const tId = parseInt(document.getElementById('atk-target-select').value);
+const tSel = document.getElementById('atk-target-select').value;
 const cId = document.getElementById('atk-cmd-select').value;
 const sliderEl = document.getElementById('atk-troops-slider');
 const stanceEl = document.getElementById('atk-stance-select');
-actionLaunchAttack(oId, tId, cId, 'strategy', sliderEl ? parseInt(sliderEl.value) : null, stanceEl ? stanceEl.value : null);
+if (tSel === 'tile' && atkTargetTile) {
+actionLaunchAttack(oId, null, cId, 'strategy', sliderEl ? parseInt(sliderEl.value) : null, stanceEl ? stanceEl.value : null, atkTargetTile.q, atkTargetTile.r);
+} else {
+actionLaunchAttack(oId, parseInt(tSel), cId, 'strategy', sliderEl ? parseInt(sliderEl.value) : null, stanceEl ? stanceEl.value : null);
+}
 }
 }
 ]);
+
+// v9 stage F: プリセット（マップで選んだ目標）の反映と、マップ選択ボタン
+const atkTargetSelEl = document.getElementById('atk-target-select');
+if (atkTargetSelEl) {
+if (atkTargetTile) atkTargetSelEl.value = 'tile';
+else if (preset && preset.castleId) atkTargetSelEl.value = String(preset.castleId);
+}
+const atkPickBtn = document.getElementById('atk-pick-btn');
+if (atkPickBtn) atkPickBtn.onclick = () => {
+closeModal();
+startMapPick(['castle', 'tile'], (pick) => {
+if (pick.type === 'castle') openAttackModal({ castleId: pick.castle.id });
+else openAttackModal({ tile: { q: pick.q, r: pick.r } });
+}, '出陣の目標を選んでください（敵の城か、マスをクリック）');
+};
 
 updateAttackPreview();
 }
 
 // v2: 独立出陣モーダル（個人フェイズ用。自分の私兵の90パーセントで出撃）
-function openIndependentAttackModal() {
+function openIndependentAttackModal(preset) {
 attackModalMode = 'independent';
+indTargetTile = (preset && preset.tile) ? { q: preset.tile.q, r: preset.tile.r } : null;
 const player = getPlayer();
 const myCastle = gameState.castles.find(c => c.id === player.castleId);
 if (!myCastle) return;
 const enemyCastles = gameState.castles.filter(c => c.factionId!== myCastle.factionId);
-if (enemyCastles.length === 0) return;
+if (enemyCastles.length === 0 && !indTargetTile) return;
 
 let html = `<div class="space-y-3">
 <p class="text-xs text-slate-400">城主の命令を待たず、自分の私兵から兵力を選んで出撃します（最低300兵）。勝てば攻略した城にそのまま移ります。</p>
@@ -727,10 +801,12 @@ let html = `<div class="space-y-3">
 <input type="range" id="ind-troops-slider" class="w-full" min="${Math.min(300, player.troops || 0)}" max="${player.troops || 0}" step="10" value="${Math.floor((player.troops || 0) * 0.9)}" oninput="updateIndependentPreview()">
 </div>
 <div>
-<label class="block text-xs text-slate-400 mb-1">攻撃目標の敵城</label>
+<label class="block text-xs text-slate-400 mb-1">攻撃目標（敵城、または任意のマス）</label>
 <select id="ind-target-select" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs text-white" onchange="updateIndependentPreview()">
 ${enemyCastles.map(c => `<option value="${c.id}">${c.name} [${FACTIONS[c.factionId].name}] (守備: ${getCastleTroops(c.id)})</option>`).join('')}
+${indTargetTile ? `<option value="tile">マス (${indTargetTile.q}, ${indTargetTile.r})${fortAt(indTargetTile.q, indTargetTile.r) ? ' の支砦' : ''}</option>` : ''}
 </select>
+<button id="ind-pick-btn" class="btn-action mt-1.5 px-3 py-1.5 rounded bg-slate-600 text-white text-xs font-bold">マップで選ぶ（城・マス）</button>
 </div>
 <div>
 <label class="block text-xs text-slate-400 mb-1">部隊方針</label>
@@ -749,13 +825,32 @@ showModal('独立出陣', html, [
 text: '出陣を実行する',
 class: 'bg-rose-600 text-white font-bold',
 onClick: () => {
-const tId = parseInt(document.getElementById('ind-target-select').value);
+const tSel = document.getElementById('ind-target-select').value;
 const indSlider = document.getElementById('ind-troops-slider');
 const indStanceEl = document.getElementById('ind-stance-select');
-actionLaunchAttack(myCastle.id, tId, player.id, 'independent', indSlider ? parseInt(indSlider.value) : null, indStanceEl ? indStanceEl.value : null);
+if (tSel === 'tile' && indTargetTile) {
+actionLaunchAttack(myCastle.id, null, player.id, 'independent', indSlider ? parseInt(indSlider.value) : null, indStanceEl ? indStanceEl.value : null, indTargetTile.q, indTargetTile.r);
+} else {
+actionLaunchAttack(myCastle.id, parseInt(tSel), player.id, 'independent', indSlider ? parseInt(indSlider.value) : null, indStanceEl ? indStanceEl.value : null);
+}
 }
 }
 ]);
+
+// v9 stage F: プリセット反映とマップ選択ボタン（出陣モーダルと同じ）
+const indTargetSelEl = document.getElementById('ind-target-select');
+if (indTargetSelEl) {
+if (indTargetTile) indTargetSelEl.value = 'tile';
+else if (preset && preset.castleId) indTargetSelEl.value = String(preset.castleId);
+}
+const indPickBtn = document.getElementById('ind-pick-btn');
+if (indPickBtn) indPickBtn.onclick = () => {
+closeModal();
+startMapPick(['castle', 'tile'], (pick) => {
+if (pick.type === 'castle') openIndependentAttackModal({ castleId: pick.castle.id });
+else openIndependentAttackModal({ tile: { q: pick.q, r: pick.r } });
+}, '出陣の目標を選んでください（敵の城か、マスをクリック）');
+};
 
 updateIndependentPreview();
 }
@@ -763,15 +858,26 @@ updateIndependentPreview();
 window.updateIndependentPreview = function() {
 const player = getPlayer();
 const origin = gameState.castles.find(c => c.id === player.castleId);
-const tId = parseInt(document.getElementById('ind-target-select').value);
-const target = gameState.castles.find(c => c.id === tId);
-if (!origin ||!target) return;
-const travel = calcTravelInfo(origin, target, player);
+const tSelVal = document.getElementById('ind-target-select').value;
+const isTileTarget = tSelVal === 'tile' && indTargetTile; // v9 stage F: マス目標
+const target = isTileTarget ? null : gameState.castles.find(c => c.id === parseInt(tSelVal));
+if (!origin || (!target && !isTileTarget)) return;
+const travel = calcTravelInfo(origin, target ? target : indTargetTile, player);
 const indSlider = document.getElementById('ind-troops-slider');
 const sendTroops = indSlider ? parseInt(indSlider.value) : Math.floor((player.troops || 0) * 0.9);
+let targetLine;
+if (target) {
+const fortNote = fortSupportRate(target) > 1 ? `、支砦援護 +${Math.round((fortSupportRate(target) - 1) * 100)}%` : '';
+targetLine = `<div>目標の実効守備力: <strong class="text-rose-300">${getEffectiveDefense(target)} 兵相当</strong>（駐留 ${getCastleTroops(target.id)} 兵、籠城バフ +${Math.round((getSiegeBuff(target) - 1) * 100)}%${fortNote}）</div>`;
+} else {
+const tileFort = fortAt(indTargetTile.q, indTargetTile.r);
+targetLine = tileFort
+? `<div>目標の支砦: <strong class="text-rose-300">守備 ${tileFort.garrison} 兵 ＝ 実効 ${Math.round(tileFort.garrison * FORT_DEFENSE_MULT * (getTerritory(indTargetTile.q, indTargetTile.r) === tileFort.factionId ? TERRITORY_BUFF : 1))} 相当</strong></div>`
+: `<div>目標のマス: <strong class="text-slate-200">(${indTargetTile.q}, ${indTargetTile.r})</strong>（到着後はそのマスで待機します）</div>`;
+}
 document.getElementById('ind-preview-box').innerHTML = `
 <div>出撃兵力: <strong class="text-amber-400">${sendTroops} 兵</strong>（出撃後に残る私兵: ${(player.troops || 0) - sendTroops} 兵）</div>
-<div>目標の実効守備力: <strong class="text-rose-300">${getEffectiveDefense(target)} 兵相当</strong>（駐留 ${getCastleTroops(target.id)} 兵、籠城バフ +${Math.round((getSiegeBuff(target) - 1) * 100)}%）</div>
+${targetLine}
 <div>行軍日数: <strong class="text-sky-400">${travel.days} 日</strong></div>
 <div class="text-slate-400">内訳: 距離 ${travel.dist}マス / マス目移動（経路の地形コスト ÷ 1日の移動力。敵地は+1）</div>
 `;
@@ -779,10 +885,12 @@ document.getElementById('ind-preview-box').innerHTML = `
 
 window.updateAttackPreview = function() {
 const oId = parseInt(document.getElementById('atk-origin-select').value);
-const tId = parseInt(document.getElementById('atk-target-select').value);
+const tSelVal = document.getElementById('atk-target-select').value;
+const isTileTarget = tSelVal === 'tile' && atkTargetTile; // v9 stage F: マス目標
+const tId = isTileTarget ? null : parseInt(tSelVal);
 const origin = gameState.castles.find(c => c.id === oId);
-const target = gameState.castles.find(c => c.id === tId);
-if (!origin ||!target) return;
+const target = isTileTarget ? null : gameState.castles.find(c => c.id === tId);
+if (!origin || (!target && !isTileTarget)) return;
 
 const cmdSelect = document.getElementById('atk-cmd-select');
 const prevCmd = cmdSelect.value;
@@ -795,7 +903,7 @@ document.getElementById('atk-preview-box').innerHTML = '<div>出撃できる武�
 return;
 }
 
-const travel = calcTravelInfo(origin, target, commander);
+const travel = calcTravelInfo(origin, target ? target : atkTargetTile, commander);
 const plan = planExpedition(origin, commander);
 const slider = document.getElementById('atk-troops-slider');
 const desired = (atkDesiredTotal == null) ? plan.total : Math.max(Math.min(300, plan.total), Math.min(plan.total, atkDesiredTotal));
@@ -810,9 +918,22 @@ const adj = buildAdjustedPlan(origin, commander, desired);
 const remain = getCastleTroops(origin.id) - adj.total;
 const warn = remain < 500 ? `<div class="text-rose-400 font-bold">警告: 出陣後、城に残る守備は ${remain} 兵だけです</div>` : '';
 
+let targetLine;
+if (target) {
+const fortNote = fortSupportRate(target) > 1 ? `、支砦援護 +${Math.round((fortSupportRate(target) - 1) * 100)}%` : '';
+targetLine = `<div>目標の実効守備力: <strong class="text-rose-300">${getEffectiveDefense(target)} 兵相当</strong>（駐留 ${getCastleTroops(target.id)} 兵、籠城バフ +${Math.round((getSiegeBuff(target) - 1) * 100)}%${fortNote}）</div>`;
+} else {
+// v9 stage F: マス目標のプレビュー
+const tileFort = fortAt(atkTargetTile.q, atkTargetTile.r);
+const tileOwner = getTerritory(atkTargetTile.q, atkTargetTile.r);
+const tileOwnerName = tileOwner ? (FACTIONS[tileOwner] ? FACTIONS[tileOwner].name : '不明') : '中立';
+targetLine = tileFort
+? `<div>目標の支砦: <strong class="text-rose-300">守備 ${tileFort.garrison} 兵 ＝ 実効 ${Math.round(tileFort.garrison * FORT_DEFENSE_MULT * (tileOwner === tileFort.factionId ? TERRITORY_BUFF : 1))} 相当</strong>（${tileOwnerName}の領地）</div><div class="text-slate-400">支砦を落とすと周辺の領地が自勢力の色に変わります。</div>`
+: `<div>目標のマス: <strong class="text-slate-200">(${atkTargetTile.q}, ${atkTargetTile.r})</strong>（領地: ${tileOwnerName}）</div><div class="text-slate-400">到着した部隊はそのマスで待機し、前線の足場になります。</div>`;
+}
 document.getElementById('atk-preview-box').innerHTML = `
 <div>出撃兵力: <strong class="text-amber-400">${adj.total} 兵</strong>（出陣後、城に残る守備: ${remain} 兵）</div>
-<div>目標の実効守備力: <strong class="text-rose-300">${getEffectiveDefense(target)} 兵相当</strong>（駐留 ${getCastleTroops(target.id)} 兵、籠城バフ +${Math.round((getSiegeBuff(target) - 1) * 100)}%）</div>
+${targetLine}
 <div>行軍日数: <strong class="text-sky-400">${travel.days} 日</strong></div>
 <div class="text-slate-400">内訳: 距離 ${travel.dist}マス / マス目移動（経路の地形コスト ÷ 1日の移動力。敵地は+1）</div>
 ${warn}
@@ -824,7 +945,7 @@ function openPolicyModal() {
     const myCastle = gameState.castles.find(c => c.id === player.castleId);
     const enemies = gameState.castles.filter(c => c.factionId !== myCastle.factionId);
 
-    let html = `<p class="text-xs text-slate-400 mb-2">勢力全体の攻撃目標を指定します。</p><div class="space-y-2">`;
+    let html = `<p class="text-xs text-slate-400 mb-2">勢力全体の攻撃目標を指定します。</p><div class="mb-2"><button id="policy-pick-btn" class="btn-action px-3 py-1.5 rounded bg-slate-600 text-white text-xs font-bold">マップで選ぶ（敵の城）</button></div><div class="space-y-2">`;
     enemies.forEach(c => {
         html += `
             <div class="flex items-center justify-between p-2.5 rounded bg-slate-900 border border-slate-700">
@@ -839,6 +960,14 @@ function openPolicyModal() {
     });
     html += `</div>`;
     showModal('君主大方針の設定', html, [{ text: 'キャンセル', class: 'bg-slate-700 text-slate-200', onClick: closeModal }]);
+    const polPickBtn = document.getElementById('policy-pick-btn');
+    if (polPickBtn) polPickBtn.onclick = () => {
+        closeModal();
+        startMapPick(['castle'], (pick) => {
+            if (pick.castle.factionId !== myCastle.factionId) actionSetFactionPolicy(pick.castle.id);
+            else { showEventNotice('設定できません', '敵の城を選んでください。', 'warn', {}); openPolicyModal(); }
+        }, '大方針の目標を選んでください（敵の城をクリック）');
+    };
 }
 
 function updateAutoButton() {
@@ -1121,12 +1250,37 @@ function drawMap() {
         ctx.fillText(troopsText, x, y + R * 1.28);
     });
 
+    // v9 stage F: 支砦（城より小さい六角＋櫓シルエット＋守備数）
+    (gameState.forts || []).forEach(fort => {
+        const { x, y } = hexToPixel(fort.q, fort.r);
+        const faction = FACTIONS[fort.factionId];
+        const color = faction ? faction.color : '#8a8f7d';
+        drawHex(x, y, R * 0.46, color, '#0d0a06', 1.5);
+        const s = R / 32;
+        ctx.fillStyle = 'rgba(13,10,6,0.9)';
+        ctx.beginPath();
+        ctx.moveTo(x - 6 * s, y + 6 * s);
+        ctx.lineTo(x - 6 * s, y - 3 * s); ctx.lineTo(x - 3.5 * s, y - 3 * s); ctx.lineTo(x - 3.5 * s, y - 7 * s);
+        ctx.lineTo(x + 3.5 * s, y - 7 * s); ctx.lineTo(x + 3.5 * s, y - 3 * s); ctx.lineTo(x + 6 * s, y - 3 * s);
+        ctx.lineTo(x + 6 * s, y + 6 * s);
+        ctx.closePath(); ctx.fill();
+        ctx.font = 'bold 9px "DotGothic16", monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(10,8,4,0.92)'; ctx.lineJoin = 'round';
+        const fortText = `砦 ${fort.garrison}`;
+        ctx.strokeText(fortText, x, y + R * 0.66);
+        ctx.fillStyle = '#efe6cf';
+        ctx.fillText(fortText, x, y + R * 0.66);
+    });
+
     gameState.armies.forEach(army => {
         const target = gameState.castles.find(c => c.id === army.targetCastleId);
-        if (!target || typeof army.posQ !== 'number') return;
+        const destPoint = target ? { q: target.q, r: target.r } : (army.targetTile || null); // v9 stage F: マス目標の部隊も描く
+        if (!destPoint || typeof army.posQ !== 'number') return;
 
         const cur = hexToPixel(army.posQ, army.posR);
-        const tp = hexToPixel(target.q, target.r);
+        const tp = hexToPixel(destPoint.q, destPoint.r);
 
         // v7: 残りの経路を点線で描く
         ctx.beginPath();
@@ -1178,6 +1332,29 @@ function drawMap() {
     });
 }
 
+// v9 stage F: マップ選択モード。目標が要る操作を、リストだけでなくマップのクリックでも選べるようにする共通の仕組み。
+// モード中はバナーが出て、クリックが通常の選択ではなく「目標の確定」として処理される。
+let mapPick = null; // { kinds: ['castle'|'tile', ...], onPick: function }
+function startMapPick(kinds, onPick, message) {
+    mapPick = { kinds, onPick };
+    const banner = document.getElementById('pick-banner');
+    const text = document.getElementById('pick-banner-text');
+    if (text) text.textContent = message || 'マップで目標を選んでください（城やマスをクリック）';
+    if (banner) banner.classList.remove('hidden');
+}
+function cancelMapPick() {
+    mapPick = null;
+    const banner = document.getElementById('pick-banner');
+    if (banner) banner.classList.add('hidden');
+}
+function resolveMapPick(pick) {
+    if (!mapPick || !mapPick.kinds.includes(pick.type)) return false;
+    const cb = mapPick.onPick;
+    cancelMapPick();
+    cb(pick);
+    return true;
+}
+
 canvas.addEventListener('click', (e) => {
     const rect = canvas.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
@@ -1195,14 +1372,6 @@ canvas.addEventListener('click', (e) => {
         }
     });
 
-    if (clickedCastle) {
-        gameState.selectedCastleId = clickedCastle.id;
-        gameState.selectedTile = null;
-        renderSelectedCastle();
-        drawMap();
-        return;
-    }
-
     // v8: 城でないマスを選ぶと、そのマスの情報と領地開発ボタンを出す
     let bestTile = null;
     let bestDist = Infinity;
@@ -1213,6 +1382,22 @@ canvas.addEventListener('click', (e) => {
             if (d < bestDist) { bestDist = d; bestTile = { q, r }; }
         }
     }
+
+    // v9 stage F: マップ選択モード中は、クリックを目標の確定として処理する（対象外の種類をクリックしてもモードは続く）
+    if (mapPick) {
+        if (clickedCastle && resolveMapPick({ type: 'castle', castle: clickedCastle })) return;
+        if (!clickedCastle && bestTile && bestDist <= hexMetrics.radius * 1.1 && resolveMapPick({ type: 'tile', q: bestTile.q, r: bestTile.r })) return;
+        return;
+    }
+
+    if (clickedCastle) {
+        gameState.selectedCastleId = clickedCastle.id;
+        gameState.selectedTile = null;
+        renderSelectedCastle();
+        drawMap();
+        return;
+    }
+
     if (bestTile && bestDist <= hexMetrics.radius * 1.1) {
         gameState.selectedTile = bestTile;
         renderSelectedTile();
