@@ -1,0 +1,53 @@
+        body {
+            font-family: 'Inter', 'Noto Serif JP', sans-serif;
+            background-color: #0f1115;
+            color: #e2e8f0;
+            user-select: none;
+        }
+        .serif {
+            font-family: 'Noto Serif JP', serif;
+        }
+        /* カスタムスクロールバー */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1a1d24;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #3b4252;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4c566a;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+        .panel-border {
+            border: 1px solid #2e3440;
+            background: linear-gradient(145deg, #161920 0%, #111318 100%);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .btn-action {
+            transition: all 0.15s ease;
+        }
+        .btn-action:hover:not(:disabled) {
+            transform: translateY(-1px);
+            filter: brightness(1.15);
+        }
+        .btn-action:active:not(:disabled) {
+            transform: translateY(0);
+        }
+        .btn-action:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+    .notice-card { animation: notice-in .25s ease-out; }
+.notice-out { opacity: 0; transition: opacity .35s ease; }
+.net-guest #btn-step-day, .net-guest #btn-next-phase, .net-guest #btn-auto-toggle, .net-guest #btn-save-game, .net-guest #btn-reset-game { display: none !important; }
+@keyframes notice-in { from { opacity: 0; transform: translateY(-10px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
